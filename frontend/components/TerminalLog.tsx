@@ -39,6 +39,7 @@ export function TerminalLog({ logs, onClearLogs }: TerminalLogProps) {
     if (s.includes("REPLANNER")) return "text-orange-400 bg-orange-950/60 border-orange-800";
     if (s.includes("SANDBOX")) return "text-cyan-400 bg-cyan-950/60 border-cyan-800";
     if (s.includes("OLLAMA")) return "text-teal-300 bg-teal-950/70 border-teal-700 font-semibold";
+    if (s.includes("GEMINI")) return "text-sky-300 bg-sky-950/70 border-sky-700 font-semibold";
     if (s.includes("CLI")) return "text-amber-300 bg-amber-950/70 border-amber-700 font-semibold";
     if (s.includes("GITHUB")) return "text-pink-300 bg-pink-950/70 border-pink-700";
     return "text-slate-400 bg-slate-900 border-slate-700";
@@ -57,7 +58,7 @@ export function TerminalLog({ logs, onClearLogs }: TerminalLogProps) {
     }
   };
 
-  const filterOptions = ["ALL", "ROUTER", "EXECUTOR", "VERIFIER", "OLLAMA", "CLI", "SANDBOX"];
+  const filterOptions = ["ALL", "ROUTER", "EXECUTOR", "VERIFIER", "OLLAMA", "CLI", "GEMINI", "SANDBOX"];
 
   return (
     <div className="bg-slate-950/90 border border-slate-800/80 rounded-2xl flex flex-col h-full shadow-2xl overflow-hidden font-mono">

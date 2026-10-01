@@ -79,6 +79,17 @@ class LLMClient:
                 res["output"] = f"[Claude CLI Error: {str(e)} - Fell back to simulated output]\n\n" + res["output"]
                 return res
 
+        # 3. Local Google Gemini CLI execution
+        if model == ModelProvider.GEMINI_CLI:
+            try:
+                return await self._call_gemini_cli(task, context, log_callback)
+            except Exception as e:
+                if log_callback:
+                    await log_callback("GEMINI", f"Gemini CLI error: {str(e)} - falling back to simulation", "WARN")
+                res = await self._simulate_execution(task, model, context, simulate_error)
+                res["output"] = f"[Gemini CLI Error: {str(e)} - Fell back to simulated output]\n\n" + res["output"]
+                return res
+
         has_real_key = bool(
             (model in [ModelProvider.CLAUDE_SONNET, ModelProvider.CLAUDE_OPUS] and self.anthropic_key)
             or (model in [ModelProvider.GPT_4O, ModelProvider.GPT_4O_MINI] and self.openai_key)
@@ -392,6 +403,98 @@ class LLMClient:
 
         if log_callback:
             await log_callback("CLI", "Claude CLI execution succeeded. Parsing response...", "SUCCESS")
+
+        parsed = _parse_model_json_output(full_stdout)
+        return {
+            "output": parsed.get("explanation", full_stdout[:300] + "..."),
+            "files": parsed.get("files", []),
+            "code_changes": parsed.get("code_changes", {}),
+            "commands": parsed.get("commands", []),
+            "input_tokens": 1200,
+            "output_tokens": 600,
+        }
+
+    async def _call_gemini_cli(
+        self,
+        task: SubTask,
+        context: Dict[str, Any],
+        log_callback: Optional[Callable[[str, str, str], Awaitable[None]]] = None,
+    ) -> Dict[str, Any]:
+        """Execute task by spawning local Google Gemini CLI subprocess and streaming output."""
+        gemini_bin = shutil.which("gemini") or shutil.which("gemini.exe") or shutil.which("gemini.cmd")
+        if not gemini_bin:
+            candidate_paths = [
+                os.path.expanduser("~\\AppData\\Local\\Programs\\Python\\Python312\\Scripts\\gemini.exe"),
+                os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "venv", "Scripts", "gemini.exe"),
+            ]
+            for p in candidate_paths:
+                if os.path.exists(p):
+                    gemini_bin = p
+                    break
+
+        if not gemini_bin:
+            if log_callback:
+                await log_callback(
+                    "GEMINI",
+                    "Gemini CLI ('gemini') not found on PATH. Run: pip install gemini-cli",
+                    "ERROR",
+                )
+            raise RuntimeError("Gemini CLI ('gemini') executable not found. Install via 'pip install gemini-cli'")
+
+        prompt = (
+            f"You are an autonomous senior software engineer. Output strictly valid JSON with keys: "
+            f"'files', 'code_changes', 'explanation', 'commands'.\n"
+            f"Subtask: {task.title}\n"
+            f"Description: {task.description}\n"
+            f"Domain: {task.domain.value}\n"
+            f"Context: {json.dumps(context)}"
+        )
+
+        if log_callback:
+            await log_callback("GEMINI", f"Spawning: {gemini_bin}...", "INFO")
+
+        proc = await asyncio.create_subprocess_exec(
+            gemini_bin,
+            prompt,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        stdout_lines = []
+
+        async def read_stdout():
+            while True:
+                line = await proc.stdout.readline()
+                if not line:
+                    break
+                decoded = line.decode(errors="replace").rstrip()
+                stdout_lines.append(decoded)
+                if log_callback and decoded:
+                    await log_callback("GEMINI", decoded[:140], "INFO")
+
+        async def read_stderr():
+            while True:
+                line = await proc.stderr.readline()
+                if not line:
+                    break
+                decoded = line.decode(errors="replace").rstrip()
+                if log_callback and decoded:
+                    await log_callback("GEMINI", f"[stderr] {decoded}", "WARN")
+
+        if proc.stdin:
+            proc.stdin.close()
+
+        await asyncio.gather(read_stdout(), read_stderr())
+        await proc.wait()
+
+        full_stdout = "\n".join(stdout_lines)
+
+        if proc.returncode != 0:
+            raise RuntimeError(f"Gemini CLI exited with code {proc.returncode}: {full_stdout}")
+
+        if log_callback:
+            await log_callback("GEMINI", "Gemini CLI execution succeeded. Parsing response...", "SUCCESS")
 
         parsed = _parse_model_json_output(full_stdout)
         return {

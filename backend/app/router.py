@@ -12,6 +12,7 @@ MODEL_PRICING: Dict[ModelProvider, Tuple[float, float]] = {
     ModelProvider.OLLAMA_QWEN: (0.0, 0.0),
     ModelProvider.OLLAMA_DEEPSEEK: (0.0, 0.0),
     ModelProvider.CLAUDE_CLI: (0.0, 0.0),
+    ModelProvider.GEMINI_CLI: (0.0, 0.0),
     ModelProvider.SIMULATOR: (0.0, 0.0),
 }
 
@@ -48,6 +49,8 @@ class DynamicModelRouter:
         if self.use_local_provider:
             if self.local_provider_type == "claude-cli":
                 return ModelProvider.CLAUDE_CLI, "Direct Terminal CLI: Claude Code CLI (No API Key)"
+            if self.local_provider_type == "gemini-cli":
+                return ModelProvider.GEMINI_CLI, "Direct Terminal CLI: Google Gemini CLI (No API Key)"
             if "deepseek" in self.ollama_model.lower():
                 return ModelProvider.OLLAMA_DEEPSEEK, f"Local AI: Ollama ({self.ollama_model}) - 100% Free & Offline"
             return ModelProvider.OLLAMA_QWEN, f"Local AI: Ollama ({self.ollama_model}) - 100% Free & Offline"
