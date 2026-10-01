@@ -1,16 +1,48 @@
 import os
 import json
+import re
+import shutil
+import asyncio
 import httpx
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Callable, Awaitable
 from app.schemas import ModelProvider, SubTask, TaskDomain
 
 
+def _parse_model_json_output(raw_text: str) -> Dict[str, Any]:
+    """Parse JSON output from LLM/CLI response with fallback regex extraction."""
+    text = raw_text.strip()
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+
+    # Extract JSON fenced inside markdown code blocks
+    match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(1))
+        except Exception:
+            pass
+
+    # Extract outermost JSON object
+    first_brace = text.find("{")
+    last_brace = text.rfind("}")
+    if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+        try:
+            return json.loads(text[first_brace : last_brace + 1])
+        except Exception:
+            pass
+
+    return {"explanation": raw_text, "files": [], "code_changes": {}, "commands": []}
+
+
 class LLMClient:
-    def __init__(self):
+    def __init__(self, ollama_base_url: str = "http://localhost:11434"):
         self.anthropic_key = os.getenv("ANTHROPIC_API_KEY")
         self.openai_key = os.getenv("OPENAI_API_KEY")
         self.google_key = os.getenv("GOOGLE_API_KEY")
         self.openrouter_key = os.getenv("OPENROUTER_API_KEY")
+        self.ollama_base_url = ollama_base_url
 
     async def execute_task(
         self,
@@ -18,7 +50,35 @@ class LLMClient:
         model: ModelProvider,
         context: Dict[str, Any],
         simulate_error: bool = False,
+        log_callback: Optional[Callable[[str, str, str], Awaitable[None]]] = None,
     ) -> Dict[str, Any]:
+        # 1. Local Ollama execution (Free, local AI)
+        if model in [ModelProvider.OLLAMA_QWEN, ModelProvider.OLLAMA_DEEPSEEK]:
+            ollama_model_name = (
+                "qwen2.5-coder:7b"
+                if model == ModelProvider.OLLAMA_QWEN
+                else "deepseek-coder:6.7b"
+            )
+            try:
+                return await self._call_ollama(task, ollama_model_name, context, log_callback)
+            except Exception as e:
+                if log_callback:
+                    await log_callback("Ollama", f"Ollama error: {str(e)} - falling back to simulation", "WARN")
+                res = await self._simulate_execution(task, model, context, simulate_error)
+                res["output"] = f"[Local Ollama Error: {str(e)} - Fell back to simulated output]\n\n" + res["output"]
+                return res
+
+        # 2. Local Claude Code CLI execution
+        if model == ModelProvider.CLAUDE_CLI:
+            try:
+                return await self._call_claude_cli(task, context, log_callback)
+            except Exception as e:
+                if log_callback:
+                    await log_callback("CLI", f"Claude CLI error: {str(e)} - falling back to simulation", "WARN")
+                res = await self._simulate_execution(task, model, context, simulate_error)
+                res["output"] = f"[Claude CLI Error: {str(e)} - Fell back to simulated output]\n\n" + res["output"]
+                return res
+
         has_real_key = bool(
             (model in [ModelProvider.CLAUDE_SONNET, ModelProvider.CLAUDE_OPUS] and self.anthropic_key)
             or (model in [ModelProvider.GPT_4O, ModelProvider.GPT_4O_MINI] and self.openai_key)
@@ -164,6 +224,184 @@ class LLMClient:
 
         # Fallback simulation
         return await self._simulate_execution(task, model, context, simulate_error=False)
+
+    async def _call_ollama(
+        self,
+        task: SubTask,
+        model_name: str,
+        context: Dict[str, Any],
+        log_callback: Optional[Callable[[str, str, str], Awaitable[None]]] = None,
+    ) -> Dict[str, Any]:
+        """Execute task using local Ollama instance with streaming logs."""
+        if log_callback:
+            await log_callback("Ollama", f"Connected to local Ollama on {self.ollama_base_url}", "INFO")
+            await log_callback("Ollama", f"Running model: [{model_name}] for subtask #{task.task_id}...", "INFO")
+
+        system_prompt = (
+            "You are an autonomous senior software engineer agent in a multi-agent team. "
+            "You must return your output strictly in JSON format with keys:\n"
+            "- 'files': list of file paths created or modified (e.g. ['src/service.py'])\n"
+            "- 'code_changes': dict mapping file_path to complete code content\n"
+            "- 'explanation': markdown text explanation of decisions made\n"
+            "- 'commands': list of shell commands to execute"
+        )
+        user_prompt = (
+            f"Subtask: {task.title}\n"
+            f"Description: {task.description}\n"
+            f"Domain: {task.domain.value}\n"
+            f"Complexity Level: {task.complexity}/10\n"
+            f"Context: {json.dumps(context)}"
+        )
+
+        payload = {
+            "model": model_name,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "format": "json",
+            "stream": True,
+        }
+
+        accumulated_text = ""
+        prompt_tokens = 0
+        completion_tokens = 0
+        line_buffer = ""
+
+        async with httpx.AsyncClient(timeout=180.0) as client:
+            async with client.stream("POST", f"{self.ollama_base_url}/api/chat", json=payload) as response:
+                async for chunk_bytes in response.aiter_lines():
+                    if not chunk_bytes:
+                        continue
+                    try:
+                        chunk = json.loads(chunk_bytes)
+                        content_piece = chunk.get("message", {}).get("content", "")
+                        accumulated_text += content_piece
+                        line_buffer += content_piece
+
+                        if "\n" in line_buffer and log_callback:
+                            lines = line_buffer.split("\n")
+                            line_buffer = lines[-1]
+                            for l in lines[:-1]:
+                                stripped = l.strip()
+                                if stripped and (stripped.startswith('"') or stripped.startswith("{") or "def " in stripped or "class " in stripped):
+                                    await log_callback("Ollama", stripped[:120], "INFO")
+
+                        if chunk.get("done"):
+                            prompt_tokens = chunk.get("prompt_eval_count", 0)
+                            completion_tokens = chunk.get("eval_count", 0)
+                    except Exception:
+                        continue
+
+        if log_callback:
+            await log_callback(
+                "Ollama",
+                f"Generation finished ({completion_tokens} tokens). Parsing output structure...",
+                "SUCCESS",
+            )
+
+        parsed = _parse_model_json_output(accumulated_text)
+        files = parsed.get("files", [])
+        code_changes = parsed.get("code_changes", {})
+
+        # Fallback if model put code in explanation without separating files
+        if not code_changes and "class " in accumulated_text or "def " in accumulated_text:
+            default_file = f"src/{task.domain.value}_module.py"
+            files.append(default_file)
+            code_changes[default_file] = accumulated_text
+
+        return {
+            "output": parsed.get("explanation", accumulated_text[:300] + "..."),
+            "files": files,
+            "code_changes": code_changes,
+            "commands": parsed.get("commands", []),
+            "input_tokens": prompt_tokens or 1000,
+            "output_tokens": completion_tokens or 500,
+        }
+
+    async def _call_claude_cli(
+        self,
+        task: SubTask,
+        context: Dict[str, Any],
+        log_callback: Optional[Callable[[str, str, str], Awaitable[None]]] = None,
+    ) -> Dict[str, Any]:
+        """Execute task by spawning local Claude Code CLI subprocess and streaming output."""
+        claude_bin = shutil.which("claude")
+        if not claude_bin:
+            local_bin = os.path.expanduser("~/.local/bin/claude.exe")
+            if os.path.exists(local_bin):
+                claude_bin = local_bin
+            else:
+                raise RuntimeError("Claude Code CLI executable not found on system PATH or ~/.local/bin/claude.exe")
+
+        prompt = (
+            f"You are an autonomous senior software engineer. Output strictly valid JSON with keys: "
+            f"'files', 'code_changes', 'explanation', 'commands'.\n"
+            f"Subtask: {task.title}\n"
+            f"Description: {task.description}\n"
+            f"Domain: {task.domain.value}\n"
+            f"Context: {json.dumps(context)}"
+        )
+
+        if log_callback:
+            await log_callback("CLI", f"Spawning: {claude_bin} --print (Streaming stdout/stderr)...", "INFO")
+
+        proc = await asyncio.create_subprocess_exec(
+            claude_bin,
+            "--print",
+            prompt,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        stdout_lines = []
+        # Stream stdout line by line
+        async def read_stdout():
+            while True:
+                line = await proc.stdout.readline()
+                if not line:
+                    break
+                decoded = line.decode(errors="replace").rstrip()
+                stdout_lines.append(decoded)
+                if log_callback and decoded:
+                    await log_callback("CLI", decoded[:140], "INFO")
+
+        async def read_stderr():
+            while True:
+                line = await proc.stderr.readline()
+                if not line:
+                    break
+                decoded = line.decode(errors="replace").rstrip()
+                if log_callback and decoded:
+                    await log_callback("CLI", f"[stderr] {decoded}", "WARN")
+
+        # Feed empty stdin immediately to prevent CLI hanging on Windows
+        if proc.stdin:
+            proc.stdin.close()
+
+        await asyncio.gather(read_stdout(), read_stderr())
+        await proc.wait()
+
+        full_stdout = "\n".join(stdout_lines)
+
+        if proc.returncode != 0:
+            if "Not logged in" in full_stdout or "Please run /login" in full_stdout:
+                raise RuntimeError("Claude CLI is not authenticated. Please run 'claude auth login' in your terminal.")
+            raise RuntimeError(f"Claude CLI exited with code {proc.returncode}")
+
+        if log_callback:
+            await log_callback("CLI", "Claude CLI execution succeeded. Parsing response...", "SUCCESS")
+
+        parsed = _parse_model_json_output(full_stdout)
+        return {
+            "output": parsed.get("explanation", full_stdout[:300] + "..."),
+            "files": parsed.get("files", []),
+            "code_changes": parsed.get("code_changes", {}),
+            "commands": parsed.get("commands", []),
+            "input_tokens": 1200,
+            "output_tokens": 600,
+        }
 
     async def _simulate_execution(
         self,

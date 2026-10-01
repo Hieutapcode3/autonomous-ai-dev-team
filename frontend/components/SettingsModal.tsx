@@ -1,12 +1,38 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { X, Settings, Key, Check, Info, GitBranch, ToggleLeft, ToggleRight } from "lucide-react";
+import {
+  X,
+  Settings,
+  Key,
+  Check,
+  Info,
+  GitBranch,
+  ToggleLeft,
+  ToggleRight,
+  Terminal,
+  Cpu,
+  CheckCircle2,
+  Server,
+  Zap,
+} from "lucide-react";
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   apiUrl: string;
+}
+
+interface LocalStatus {
+  ollama: {
+    online: boolean;
+    base_url: string;
+    models: string[];
+  };
+  claude_cli: {
+    found: boolean;
+    path: string | null;
+  };
 }
 
 export function SettingsModal({ isOpen, onClose, apiUrl }: SettingsModalProps) {
@@ -20,6 +46,13 @@ export function SettingsModal({ isOpen, onClose, apiUrl }: SettingsModalProps) {
   const [hasGithubToken, setHasGithubToken] = useState(false);
   const [saved, setSaved] = useState(false);
 
+  // Local AI & CLI runner state
+  const [useLocalProvider, setUseLocalProvider] = useState(false);
+  const [localProviderType, setLocalProviderType] = useState<"ollama" | "claude-cli">("ollama");
+  const [ollamaModel, setOllamaModel] = useState("qwen2.5-coder:7b");
+  const [ollamaBaseUrl, setOllamaBaseUrl] = useState("http://localhost:11434");
+  const [localStatus, setLocalStatus] = useState<LocalStatus | null>(null);
+
   useEffect(() => {
     if (isOpen) {
       fetch(`${apiUrl}/api/settings`)
@@ -28,6 +61,20 @@ export function SettingsModal({ isOpen, onClose, apiUrl }: SettingsModalProps) {
           setSimulationMode(data.simulation_mode ?? true);
           setAutoPushGithub(data.auto_push_github ?? false);
           setHasGithubToken(data.has_github_token ?? false);
+          setUseLocalProvider(data.use_local_provider ?? false);
+          setLocalProviderType(data.local_provider_type ?? "ollama");
+          if (data.ollama_model) setOllamaModel(data.ollama_model);
+          if (data.ollama_base_url) setOllamaBaseUrl(data.ollama_base_url);
+        })
+        .catch(() => {});
+
+      fetch(`${apiUrl}/api/local-status`)
+        .then((res) => res.json())
+        .then((data) => {
+          setLocalStatus(data);
+          if (data?.ollama?.models?.length > 0 && !data.ollama.models.includes(ollamaModel)) {
+            setOllamaModel(data.ollama.models[0]);
+          }
         })
         .catch(() => {});
     }
@@ -49,6 +96,10 @@ export function SettingsModal({ isOpen, onClose, apiUrl }: SettingsModalProps) {
           github_token: githubToken || undefined,
           simulation_mode: simulationMode,
           auto_push_github: autoPushGithub,
+          use_local_provider: useLocalProvider,
+          local_provider_type: localProviderType,
+          ollama_model: ollamaModel,
+          ollama_base_url: ollamaBaseUrl,
         }),
       });
       setSaved(true);
@@ -102,6 +153,160 @@ export function SettingsModal({ isOpen, onClose, apiUrl }: SettingsModalProps) {
               </p>
             </div>
           </label>
+
+          {/* Local AI & Direct Terminal CLI Section */}
+          <div className="flex flex-col gap-3 pt-3 border-t border-slate-800">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Terminal className="w-4 h-4 text-emerald-400" />
+                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                  Local AI &amp; Direct CLI Runner
+                </p>
+              </div>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-950/60 border border-emerald-500/40 text-emerald-400 font-semibold">
+                No API Key Required
+              </span>
+            </div>
+
+            <label className="flex items-center gap-3 cursor-pointer p-3 rounded-xl bg-slate-950/70 border border-slate-800 hover:border-emerald-500/40 transition-colors">
+              <div className="relative" onClick={() => setUseLocalProvider((v) => !v)}>
+                {useLocalProvider ? (
+                  <ToggleRight className="w-8 h-8 text-emerald-400" />
+                ) : (
+                  <ToggleLeft className="w-8 h-8 text-slate-600" />
+                )}
+              </div>
+              <div className="text-xs">
+                <span className={`font-semibold ${useLocalProvider ? "text-emerald-300" : "text-slate-400"}`}>
+                  {useLocalProvider ? "Run via Local AI / Terminal CLI (Active)" : "Run via Local AI / Terminal CLI (Disabled)"}
+                </span>
+                <p className="text-slate-500 text-[11px]">
+                  Bypasses cloud API tokens and executes directly through your machine's Ollama or Claude CLI.
+                </p>
+              </div>
+            </label>
+
+            {useLocalProvider && (
+              <div className="flex flex-col gap-3 p-3.5 bg-slate-950/90 border border-slate-800/90 rounded-xl animate-in fade-in duration-150">
+                {/* Provider Type Selection */}
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  {/* Ollama option */}
+                  <button
+                    type="button"
+                    onClick={() => setLocalProviderType("ollama")}
+                    className={`p-2.5 rounded-xl border text-left flex flex-col gap-1 transition-all ${
+                      localProviderType === "ollama"
+                        ? "bg-teal-950/40 border-teal-500/60 text-slate-100 shadow-sm"
+                        : "bg-slate-900/50 border-slate-800 text-slate-400 hover:border-slate-700"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold flex items-center gap-1.5 text-teal-300">
+                        <Cpu className="w-3.5 h-3.5" /> Ollama Local AI
+                      </span>
+                      {localStatus?.ollama?.online && (
+                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" title="Ollama Online" />
+                      )}
+                    </div>
+                    <span className="text-[10px] text-slate-400">Offline, 100% Free, GPU/CPU</span>
+                  </button>
+
+                  {/* Claude CLI option */}
+                  <button
+                    type="button"
+                    onClick={() => setLocalProviderType("claude-cli")}
+                    className={`p-2.5 rounded-xl border text-left flex flex-col gap-1 transition-all ${
+                      localProviderType === "claude-cli"
+                        ? "bg-amber-950/40 border-amber-500/60 text-slate-100 shadow-sm"
+                        : "bg-slate-900/50 border-slate-800 text-slate-400 hover:border-slate-700"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold flex items-center gap-1.5 text-amber-300">
+                        <Terminal className="w-3.5 h-3.5" /> Claude Code CLI
+                      </span>
+                      {localStatus?.claude_cli?.found && (
+                        <span className="w-2 h-2 rounded-full bg-emerald-400" title="Claude CLI Detected" />
+                      )}
+                    </div>
+                    <span className="text-[10px] text-slate-400">Claude Pro subscription CLI</span>
+                  </button>
+                </div>
+
+                {/* Ollama options detail */}
+                {localProviderType === "ollama" && (
+                  <div className="flex flex-col gap-2 pt-1">
+                    <div className="flex items-center justify-between text-xs">
+                      <label className="text-[11px] font-semibold text-slate-400 flex items-center gap-1">
+                        <Server className="w-3 h-3 text-teal-400" /> Active Ollama Model
+                      </label>
+                      <span className="text-[10px] text-emerald-400 flex items-center gap-1">
+                        {localStatus?.ollama?.online ? (
+                          <>
+                            <CheckCircle2 className="w-3 h-3" /> {localStatus.ollama.models.length} model(s) available
+                          </>
+                        ) : (
+                          <span className="text-amber-400">Ollama service not detected</span>
+                        )}
+                      </span>
+                    </div>
+
+                    {localStatus?.ollama?.models && localStatus.ollama.models.length > 0 ? (
+                      <select
+                        value={ollamaModel}
+                        onChange={(e) => setOllamaModel(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-teal-500"
+                      >
+                        {localStatus.ollama.models.map((m) => (
+                          <option key={m} value={m}>
+                            {m} {m.includes("qwen") ? "(Recommended for Coding)" : ""}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        type="text"
+                        value={ollamaModel}
+                        onChange={(e) => setOllamaModel(e.target.value)}
+                        placeholder="e.g. qwen2.5-coder:7b"
+                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-teal-500"
+                      />
+                    )}
+
+                    <div className="flex items-center justify-between text-[11px] text-slate-500 px-1">
+                      <span>Server URL: {ollamaBaseUrl}</span>
+                      <span className="text-teal-400 font-semibold">Zero API Cost</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Claude CLI detail */}
+                {localProviderType === "claude-cli" && (
+                  <div className="flex flex-col gap-2 pt-1">
+                    <div className="p-2.5 rounded-lg bg-amber-950/20 border border-amber-500/30 text-xs text-slate-300">
+                      <div className="font-semibold text-amber-300 flex items-center gap-1.5 mb-1">
+                        <Zap className="w-3.5 h-3.5" /> Direct Subprocess Terminal Runner
+                      </div>
+                      <p className="text-[11px] text-slate-400 leading-relaxed">
+                        Spawns <code className="text-amber-200 font-mono">claude --print</code> directly from your machine. Real-time stdout will stream into the Terminal below.
+                      </p>
+                      <div className="mt-2 text-[10px] text-slate-400">
+                        {localStatus?.claude_cli?.found ? (
+                          <span className="text-emerald-400 flex items-center gap-1">
+                            <Check className="w-3 h-3" /> Detected at: {localStatus.claude_cli.path}
+                          </span>
+                        ) : (
+                          <span className="text-amber-400">
+                            Run <code className="font-mono">claude auth login</code> in terminal before starting.
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
 
           {/* LLM API Keys */}
           <div className="flex flex-col gap-3 pt-2 border-t border-slate-800">

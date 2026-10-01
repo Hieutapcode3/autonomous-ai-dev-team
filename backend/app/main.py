@@ -1,5 +1,8 @@
 import asyncio
 import uuid
+import os
+import shutil
+import httpx
 from typing import Dict, List, Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -103,6 +106,9 @@ async def run_session(session_id: str, opts: RunOptions = RunOptions()):
     router = DynamicModelRouter(
         cost_constrained=opts.cost_constrained,
         force_simulator=current_settings.simulation_mode,
+        use_local_provider=current_settings.use_local_provider,
+        local_provider_type=current_settings.local_provider_type,
+        ollama_model=current_settings.ollama_model,
     )
     verifier = VerifierGate(sandbox=sandbox_runtime)
 
@@ -144,6 +150,40 @@ async def get_workspace_file(path: str = Query(...)):
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@app.get("/api/local-status")
+async def get_local_status():
+    """Detect presence and health of local Ollama server and Claude Code CLI."""
+    ollama_online = False
+    ollama_models = []
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            resp = await client.get(f"{current_settings.ollama_base_url}/api/tags")
+            if resp.status_code == 200:
+                ollama_online = True
+                data = resp.json()
+                ollama_models = [m.get("name") for m in data.get("models", [])]
+    except Exception:
+        pass
+
+    claude_cli_path = shutil.which("claude")
+    if not claude_cli_path:
+        local_p = os.path.expanduser("~/.local/bin/claude.exe")
+        if os.path.exists(local_p):
+            claude_cli_path = local_p
+
+    return {
+        "ollama": {
+            "online": ollama_online,
+            "base_url": current_settings.ollama_base_url,
+            "models": ollama_models,
+        },
+        "claude_cli": {
+            "found": bool(claude_cli_path),
+            "path": claude_cli_path,
+        },
+    }
+
+
 @app.get("/api/settings")
 async def get_settings():
     return {
@@ -154,6 +194,10 @@ async def get_settings():
         "has_google_key": bool(llm_client.google_key),
         "auto_push_github": current_settings.auto_push_github,
         "has_github_token": bool(current_settings.github_token),
+        "use_local_provider": current_settings.use_local_provider,
+        "local_provider_type": current_settings.local_provider_type,
+        "ollama_model": current_settings.ollama_model,
+        "ollama_base_url": current_settings.ollama_base_url,
     }
 
 
@@ -169,6 +213,8 @@ async def update_settings(cfg: ConfigSettings):
         llm_client.google_key = cfg.google_api_key
     if cfg.openrouter_api_key:
         llm_client.openrouter_key = cfg.openrouter_api_key
+    if cfg.ollama_base_url:
+        llm_client.ollama_base_url = cfg.ollama_base_url
     return {"status": "updated"}
 
 

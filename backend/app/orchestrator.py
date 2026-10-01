@@ -190,6 +190,7 @@ class TeamOrchestrator:
                     model=allocated_model,
                     context={"objective": self.state.objective},
                     simulate_error=should_fail,
+                    log_callback=self._emit_log,
                 )
 
                 if should_fail:
