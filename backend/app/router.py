@@ -9,14 +9,27 @@ MODEL_PRICING: Dict[ModelProvider, Tuple[float, float]] = {
     ModelProvider.GPT_4O_MINI: (0.15 / 1_000_000, 0.60 / 1_000_000),
     ModelProvider.GEMINI_PRO: (1.25 / 1_000_000, 5.00 / 1_000_000),
     ModelProvider.DEEPSEEK_CODER: (0.14 / 1_000_000, 0.28 / 1_000_000),
+    ModelProvider.OLLAMA_QWEN: (0.0, 0.0),
+    ModelProvider.OLLAMA_DEEPSEEK: (0.0, 0.0),
+    ModelProvider.CLAUDE_CLI: (0.0, 0.0),
     ModelProvider.SIMULATOR: (0.0, 0.0),
 }
 
 
 class DynamicModelRouter:
-    def __init__(self, cost_constrained: bool = False, force_simulator: bool = False):
+    def __init__(
+        self,
+        cost_constrained: bool = False,
+        force_simulator: bool = False,
+        use_local_provider: bool = False,
+        local_provider_type: str = "ollama",
+        ollama_model: str = "qwen2.5-coder:7b",
+    ):
         self.cost_constrained = cost_constrained
         self.force_simulator = force_simulator
+        self.use_local_provider = use_local_provider
+        self.local_provider_type = local_provider_type
+        self.ollama_model = ollama_model
 
     @staticmethod
     def get_agent_for_task(domain: TaskDomain) -> str:
@@ -31,6 +44,13 @@ class DynamicModelRouter:
     def route_task(self, task: SubTask, override: ModelProvider | None = None) -> Tuple[ModelProvider, str]:
         if override:
             return override, "Manual override by user"
+
+        if self.use_local_provider:
+            if self.local_provider_type == "claude-cli":
+                return ModelProvider.CLAUDE_CLI, "Direct Terminal CLI: Claude Code CLI (No API Key)"
+            if "deepseek" in self.ollama_model.lower():
+                return ModelProvider.OLLAMA_DEEPSEEK, f"Local AI: Ollama ({self.ollama_model}) - 100% Free & Offline"
+            return ModelProvider.OLLAMA_QWEN, f"Local AI: Ollama ({self.ollama_model}) - 100% Free & Offline"
 
         # Tier 1 & 2: Big-context tasks
         if "big_log_analysis" in task.required_tools or "large_repo_search" in task.required_tools:
