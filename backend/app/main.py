@@ -171,6 +171,16 @@ async def get_local_status():
         if os.path.exists(local_p):
             claude_cli_path = local_p
 
+    gemini_cli_path = shutil.which("gemini") or shutil.which("gemini.exe") or shutil.which("gemini.cmd")
+    if not gemini_cli_path:
+        for p in [
+            os.path.expanduser("~\\AppData\\Local\\Programs\\Python\\Python312\\Scripts\\gemini.exe"),
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "venv", "Scripts", "gemini.exe"),
+        ]:
+            if os.path.exists(p):
+                gemini_cli_path = p
+                break
+
     return {
         "ollama": {
             "online": ollama_online,
@@ -180,6 +190,10 @@ async def get_local_status():
         "claude_cli": {
             "found": bool(claude_cli_path),
             "path": claude_cli_path,
+        },
+        "gemini_cli": {
+            "found": bool(gemini_cli_path),
+            "path": gemini_cli_path,
         },
     }
 
@@ -198,6 +212,7 @@ async def get_settings():
         "local_provider_type": current_settings.local_provider_type,
         "ollama_model": current_settings.ollama_model,
         "ollama_base_url": current_settings.ollama_base_url,
+        "gemini_cli_command": current_settings.gemini_cli_command,
     }
 
 

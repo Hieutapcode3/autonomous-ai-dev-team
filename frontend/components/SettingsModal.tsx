@@ -15,6 +15,7 @@ import {
   CheckCircle2,
   Server,
   Zap,
+  Sparkles,
 } from "lucide-react";
 
 interface SettingsModalProps {
@@ -33,6 +34,10 @@ interface LocalStatus {
     found: boolean;
     path: string | null;
   };
+  gemini_cli: {
+    found: boolean;
+    path: string | null;
+  };
 }
 
 export function SettingsModal({ isOpen, onClose, apiUrl }: SettingsModalProps) {
@@ -48,9 +53,10 @@ export function SettingsModal({ isOpen, onClose, apiUrl }: SettingsModalProps) {
 
   // Local AI & CLI runner state
   const [useLocalProvider, setUseLocalProvider] = useState(false);
-  const [localProviderType, setLocalProviderType] = useState<"ollama" | "claude-cli">("ollama");
+  const [localProviderType, setLocalProviderType] = useState<"ollama" | "claude-cli" | "gemini-cli">("ollama");
   const [ollamaModel, setOllamaModel] = useState("qwen2.5-coder:7b");
   const [ollamaBaseUrl, setOllamaBaseUrl] = useState("http://localhost:11434");
+  const [geminiCliCommand, setGeminiCliCommand] = useState("gemini");
   const [localStatus, setLocalStatus] = useState<LocalStatus | null>(null);
 
   useEffect(() => {
@@ -65,6 +71,7 @@ export function SettingsModal({ isOpen, onClose, apiUrl }: SettingsModalProps) {
           setLocalProviderType(data.local_provider_type ?? "ollama");
           if (data.ollama_model) setOllamaModel(data.ollama_model);
           if (data.ollama_base_url) setOllamaBaseUrl(data.ollama_base_url);
+          if (data.gemini_cli_command) setGeminiCliCommand(data.gemini_cli_command);
         })
         .catch(() => {});
 
@@ -100,6 +107,7 @@ export function SettingsModal({ isOpen, onClose, apiUrl }: SettingsModalProps) {
           local_provider_type: localProviderType,
           ollama_model: ollamaModel,
           ollama_base_url: ollamaBaseUrl,
+          gemini_cli_command: geminiCliCommand,
         }),
       });
       setSaved(true);
@@ -181,7 +189,7 @@ export function SettingsModal({ isOpen, onClose, apiUrl }: SettingsModalProps) {
                   {useLocalProvider ? "Run via Local AI / Terminal CLI (Active)" : "Run via Local AI / Terminal CLI (Disabled)"}
                 </span>
                 <p className="text-slate-500 text-[11px]">
-                  Bypasses cloud API tokens and executes directly through your machine's Ollama or Claude CLI.
+                  Bypasses cloud API tokens and executes directly through your machine's Ollama, Claude, or Gemini CLI.
                 </p>
               </div>
             </label>
@@ -189,7 +197,7 @@ export function SettingsModal({ isOpen, onClose, apiUrl }: SettingsModalProps) {
             {useLocalProvider && (
               <div className="flex flex-col gap-3 p-3.5 bg-slate-950/90 border border-slate-800/90 rounded-xl animate-in fade-in duration-150">
                 {/* Provider Type Selection */}
-                <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
                   {/* Ollama option */}
                   <button
                     type="button"
@@ -202,13 +210,13 @@ export function SettingsModal({ isOpen, onClose, apiUrl }: SettingsModalProps) {
                   >
                     <div className="flex items-center justify-between">
                       <span className="font-semibold flex items-center gap-1.5 text-teal-300">
-                        <Cpu className="w-3.5 h-3.5" /> Ollama Local AI
+                        <Cpu className="w-3.5 h-3.5" /> Ollama
                       </span>
                       {localStatus?.ollama?.online && (
                         <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" title="Ollama Online" />
                       )}
                     </div>
-                    <span className="text-[10px] text-slate-400">Offline, 100% Free, GPU/CPU</span>
+                    <span className="text-[10px] text-slate-400">Offline &amp; Free</span>
                   </button>
 
                   {/* Claude CLI option */}
@@ -223,13 +231,34 @@ export function SettingsModal({ isOpen, onClose, apiUrl }: SettingsModalProps) {
                   >
                     <div className="flex items-center justify-between">
                       <span className="font-semibold flex items-center gap-1.5 text-amber-300">
-                        <Terminal className="w-3.5 h-3.5" /> Claude Code CLI
+                        <Terminal className="w-3.5 h-3.5" /> Claude CLI
                       </span>
                       {localStatus?.claude_cli?.found && (
                         <span className="w-2 h-2 rounded-full bg-emerald-400" title="Claude CLI Detected" />
                       )}
                     </div>
-                    <span className="text-[10px] text-slate-400">Claude Pro subscription CLI</span>
+                    <span className="text-[10px] text-slate-400">Claude Code tool</span>
+                  </button>
+
+                  {/* Gemini CLI option */}
+                  <button
+                    type="button"
+                    onClick={() => setLocalProviderType("gemini-cli")}
+                    className={`p-2.5 rounded-xl border text-left flex flex-col gap-1 transition-all ${
+                      localProviderType === "gemini-cli"
+                        ? "bg-sky-950/40 border-sky-500/60 text-slate-100 shadow-sm"
+                        : "bg-slate-900/50 border-slate-800 text-slate-400 hover:border-slate-700"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold flex items-center gap-1.5 text-sky-300">
+                        <Sparkles className="w-3.5 h-3.5" /> Gemini CLI
+                      </span>
+                      {localStatus?.gemini_cli?.found && (
+                        <span className="w-2 h-2 rounded-full bg-emerald-400" title="Gemini CLI Detected" />
+                      )}
+                    </div>
+                    <span className="text-[10px] text-slate-400">Google Gemini CLI</span>
                   </button>
                 </div>
 
@@ -301,6 +330,44 @@ export function SettingsModal({ isOpen, onClose, apiUrl }: SettingsModalProps) {
                           </span>
                         )}
                       </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Gemini CLI detail */}
+                {localProviderType === "gemini-cli" && (
+                  <div className="flex flex-col gap-2.5 pt-1">
+                    <div className="p-2.5 rounded-lg bg-sky-950/20 border border-sky-500/30 text-xs text-slate-300">
+                      <div className="font-semibold text-sky-300 flex items-center gap-1.5 mb-1">
+                        <Sparkles className="w-3.5 h-3.5" /> Google Gemini Terminal CLI Runner
+                      </div>
+                      <p className="text-[11px] text-slate-400 leading-relaxed">
+                        Spawns local terminal command <code className="text-sky-200 font-mono">{geminiCliCommand}</code> and streams real-time output into the Terminal below.
+                      </p>
+                      <div className="mt-2 text-[10px] text-slate-400 flex items-center justify-between">
+                        {localStatus?.gemini_cli?.found ? (
+                          <span className="text-emerald-400 flex items-center gap-1">
+                            <Check className="w-3 h-3" /> Detected: {localStatus.gemini_cli.path}
+                          </span>
+                        ) : (
+                          <span className="text-amber-400">
+                            Install CLI via: <code className="font-mono bg-slate-900 px-1 py-0.5 rounded text-amber-200">pip install gemini-cli</code>
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-400 mb-1 flex items-center gap-1">
+                        <Terminal className="w-3 h-3 text-sky-400" /> CLI Executable / Command
+                      </label>
+                      <input
+                        type="text"
+                        value={geminiCliCommand}
+                        onChange={(e) => setGeminiCliCommand(e.target.value)}
+                        placeholder="gemini"
+                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-sky-500"
+                      />
                     </div>
                   </div>
                 )}

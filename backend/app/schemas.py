@@ -22,6 +22,7 @@ class ModelProvider(str, Enum):
     OLLAMA_QWEN = "ollama:qwen2.5-coder:7b"
     OLLAMA_DEEPSEEK = "ollama:deepseek-coder:6.7b"
     CLAUDE_CLI = "claude-cli"
+    GEMINI_CLI = "gemini-cli"
     SIMULATOR = "mock-simulator"
 
 
@@ -115,6 +116,7 @@ class ConfigSettings(BaseModel):
     default_cost_constrained: bool = False
     auto_push_github: bool = False
     use_local_provider: bool = False
-    local_provider_type: str = "ollama"  # "ollama" or "claude-cli"
+    local_provider_type: str = "ollama"  # "ollama", "claude-cli", or "gemini-cli"
     ollama_model: str = "qwen2.5-coder:7b"
     ollama_base_url: str = "http://localhost:11434"
+    gemini_cli_command: str = "gemini"
