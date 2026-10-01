@@ -112,10 +112,17 @@ class LLMClient:
     async def _call_real_provider(
         self, task: SubTask, model: ModelProvider, context: Dict[str, Any]
     ) -> Dict[str, Any]:
+        rules_list = context.get("rules", [])
+        rules_text = "\n".join([f"- {r.get('title')}: {r.get('content')}" for r in rules_list]) if rules_list else "Standard clean code."
+        skills_list = context.get("skills", [])
+        skills_text = "\n".join([f"- {s.get('name')}: {s.get('description')}" for s in skills_list]) if skills_list else "None."
+
         system_prompt = (
-            "You are an autonomous senior software engineer agent in a multi-agent team. "
+            "You are an autonomous senior software engineer agent in a multi-agent team.\n\n"
+            f"MANDATORY PROJECT RULES (NON-NEGOTIABLE):\n{rules_text}\n\n"
+            f"AVAILABLE WORKFLOW SKILLS:\n{skills_text}\n\n"
             "You must return your output strictly in JSON format with keys:\n"
-            "- 'files': list of file paths created or modified (e.g. ['src/service.py'])\n"
+            "- 'files': list of file paths created or modified\n"
             "- 'code_changes': dict mapping file_path to complete code content\n"
             "- 'explanation': markdown text explanation of decisions made\n"
             "- 'commands': list of shell commands to execute"
@@ -561,7 +568,82 @@ class LLMClient:
             }
 
         # Successful implementations
-        if task.domain in [TaskDomain.ANALYSIS, TaskDomain.ARCHITECTURE]:
+        is_unity = context.get("project_type") == "unity"
+
+        if is_unity:
+            if task.domain in [TaskDomain.ANALYSIS, TaskDomain.ARCHITECTURE]:
+                target = "Assets/Scripts/Architecture/GameArchitectureSpec.md"
+                files.append(target)
+                code_changes[target] = (
+                    f"# Unity Game Architecture Specification\n\n"
+                    f"## Objective\n{task.description}\n\n"
+                    f"## Architecture Guidelines\n"
+                    f"- Zero Vietnamese comments in codebase (Enforcing RULE_NO_VIETNAMESE_IN_CODE)\n"
+                    f"- ScriptableObject event channels for decoupled communication\n"
+                    f"- Cached component references in Awake()\n\n"
+                    f"## Core Components\n"
+                    f"- GameController.cs (Manager & game loop coordinator)\n"
+                    f"- PrefabConfig.cs (ScriptableObject data definition)\n"
+                )
+                explanation = f"Generated Unity architecture blueprint and component contracts for {task.title}."
+
+            elif task.domain == TaskDomain.IMPLEMENTATION:
+                if "prefab" in task.title.lower() or "tool" in task.title.lower():
+                    target = "Assets/Scripts/Gameplay/PrefabConfig.cs"
+                    files.append(target)
+                    code_changes[target] = (
+                        "using UnityEngine;\n\n"
+                        "namespace GamePlay.Core\n"
+                        "{\n"
+                        "    [CreateAssetMenu(fileName = \"PrefabConfig\", menuName = \"Game/PrefabConfig\")]\n"
+                        "    public class PrefabConfig : ScriptableObject\n"
+                        "    {\n"
+                        "        [SerializeField] private string prefabName = \"BlockEntity\";\n"
+                        "        [SerializeField] private Vector3 spawnPosition = Vector3.zero;\n\n"
+                        "        public string PrefabName => prefabName;\n"
+                        "        public Vector3 SpawnPosition => spawnPosition;\n"
+                        "    }\n"
+                        "}\n"
+                    )
+                    explanation = f"Created Unity ScriptableObject configuration class {target}."
+                else:
+                    target = "Assets/Scripts/Gameplay/GameController.cs"
+                    files.append(target)
+                    code_changes[target] = (
+                        "using System;\n"
+                        "using UnityEngine;\n\n"
+                        "namespace GamePlay.Core\n"
+                        "{\n"
+                        "    public class GameController : MonoBehaviour\n"
+                        "    {\n"
+                        "        [SerializeField] private int score = 0;\n"
+                        "        [SerializeField] private float gameSpeed = 1.0f;\n\n"
+                        "        public event Action<int> OnScoreChanged;\n\n"
+                        "        private void Awake()\n"
+                        "        {\n"
+                        "            score = 0;\n"
+                        "        }\n\n"
+                        "        public void AddScore(int amount)\n"
+                        "        {\n"
+                        "            if (amount <= 0) return;\n"
+                        "            score += amount;\n"
+                        "            OnScoreChanged?.Invoke(score);\n"
+                        "        }\n\n"
+                        "        public int GetCurrentScore() => score;\n"
+                        "    }\n"
+                        "}\n"
+                    )
+                    explanation = f"Implemented clean Unity C# MonoBehaviour component {target} respecting project rules."
+
+            elif task.domain == TaskDomain.VERIFICATION:
+                explanation = f"Quality Gate verified C# syntax, verified zero Vietnamese comments, and validated Unity rules."
+
+            else:
+                files.append("Assets/Scripts/Config.json")
+                code_changes["Assets/Scripts/Config.json"] = json.dumps({"engine": "unity", "task_id": task.task_id}, indent=2)
+                explanation = f"Configured Unity runtime settings for {task.title}."
+
+        elif task.domain in [TaskDomain.ANALYSIS, TaskDomain.ARCHITECTURE]:
             files.append("docs/architecture_spec.md")
             code_changes["docs/architecture_spec.md"] = (
                 f"# Architecture Specification\n\n"

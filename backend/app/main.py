@@ -73,13 +73,33 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
+from app.context_loader import ProjectContextLoader
+
+
 @app.post("/api/sessions", response_model=GlobalDAGState)
 async def create_session(req: CreateSessionRequest):
     session_id = f"sess_{uuid.uuid4().hex[:8]}"
-    state = planner_engine.decompose_objective(session_id=session_id, objective=req.objective)
+    context = ProjectContextLoader.ingest(req.project_path, req.project_type)
+    state = planner_engine.decompose_objective(
+        session_id=session_id,
+        objective=req.objective,
+        project_type=context["project_type"],
+        rules=context["rules"],
+        skills=context["skills"],
+    )
+    state.project_path = context["project_path"]
+    state.project_type = context["project_type"]
+    state.ingested_rules = context["rules"]
+    state.ingested_skills = context["skills"]
+    state.context_summary = context["summary"]
     state.max_iterations = req.max_iterations
     sessions[session_id] = state
     return state
+
+
+@app.get("/api/context/inspect")
+async def inspect_project_context(path: Optional[str] = None, project_type: Optional[str] = "generic"):
+    return ProjectContextLoader.ingest(path, project_type)
 
 
 @app.get("/api/sessions")
@@ -127,12 +147,17 @@ async def run_session(session_id: str, opts: RunOptions = RunOptions()):
         local_provider_type=current_settings.local_provider_type,
         ollama_model=current_settings.ollama_model,
     )
-    verifier = VerifierGate(sandbox=sandbox_runtime)
+    active_sandbox = (
+        SandboxRuntime(base_workspace=state.project_path)
+        if state.project_path and os.path.exists(state.project_path)
+        else sandbox_runtime
+    )
+    verifier = VerifierGate(sandbox=active_sandbox)
 
     orchestrator = TeamOrchestrator(
         state=state,
         router=router,
-        sandbox=sandbox_runtime,
+        sandbox=active_sandbox,
         verifier=verifier,
         planner=planner_engine,
         llm_client=llm_client,

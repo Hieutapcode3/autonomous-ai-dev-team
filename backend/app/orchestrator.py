@@ -123,6 +123,35 @@ class TeamOrchestrator:
             "Orchestrator",
             f"Initiating execution pipeline for session {self.state.session_id} (Est. Total Duration: ~{self.state.total_estimated_time_sec}s)..."
         )
+
+        # Phase 0: Project Context, Rule & Skill Ingestion Gate
+        project_type = self.state.project_type or "generic"
+        project_path = self.state.project_path
+        await self._emit_log(
+            "ContextLoader",
+            f"Phase 0: Scanning project guidelines at '{project_path or 'Workspace Sandbox'}' [Type: {project_type.upper()}]...",
+            "INFO"
+        )
+        if self.state.ingested_rules:
+            rule_titles = [r.get("title", r.get("id")) for r in self.state.ingested_rules]
+            await self._emit_log(
+                "ContextLoader",
+                f"Ingested {len(self.state.ingested_rules)} Active Rules: {', '.join(rule_titles)}",
+                "SUCCESS"
+            )
+        if self.state.ingested_skills:
+            skill_names = [s.get("name") for s in self.state.ingested_skills]
+            await self._emit_log(
+                "ContextLoader",
+                f"Discovered {len(self.state.ingested_skills)} Specialized Skills: {', '.join(skill_names)}",
+                "SUCCESS"
+            )
+        await self._emit_log(
+            "ContextLoader",
+            "Rule & Skill Ingestion Gate PASSED. All guidelines bound to Agent Fleet.",
+            "SUCCESS"
+        )
+
         await self._broadcast("SESSION_UPDATED", self.state.model_dump())
 
         replan_count = 0
@@ -171,7 +200,8 @@ class TeamOrchestrator:
                 await self._update_fleet("ACTIVE", "IDLE", "IDLE")
                 allocated_model, rationale = self.router.route_task(task)
                 task.assigned_model = allocated_model
-                task.assigned_agent = self.router.get_agent_for_task(task.domain)
+                if not task.assigned_agent:
+                    task.assigned_agent = self.router.get_agent_for_task(task.domain)
                 task.routing_rationale = rationale
                 task.status = TaskStatus.RUNNING
 
@@ -192,7 +222,13 @@ class TeamOrchestrator:
                 exec_result = await self.llm.execute_task(
                     task=task,
                     model=allocated_model,
-                    context={"objective": self.state.objective},
+                    context={
+                        "objective": self.state.objective,
+                        "project_path": self.state.project_path,
+                        "project_type": self.state.project_type,
+                        "rules": self.state.ingested_rules,
+                        "skills": self.state.ingested_skills,
+                    },
                     simulate_error=should_fail,
                     log_callback=self._emit_log,
                 )

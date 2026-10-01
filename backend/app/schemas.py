@@ -70,6 +70,11 @@ class GlobalDAGState(BaseModel):
     created_at: float = Field(default_factory=time.time)
     updated_at: float = Field(default_factory=time.time)
     github_result: Optional[Dict[str, str]] = None
+    project_path: Optional[str] = None
+    project_type: str = "generic"
+    ingested_rules: List[Dict[str, Any]] = Field(default_factory=list)
+    ingested_skills: List[Dict[str, Any]] = Field(default_factory=list)
+    context_summary: Optional[str] = None
 
 
 class VerifierResult(BaseModel):
@@ -101,8 +106,10 @@ class CreateSessionRequest(BaseModel):
     objective: str
     cost_constrained: bool = False
     sandbox_path: Optional[str] = None
+    project_path: Optional[str] = None
+    project_type: Optional[str] = "generic"
     use_simulation: bool = True
-    max_iterations: int = 5
+    max_iterations: int = 15
     selected_provider_override: Optional[ModelProvider] = None
 
 

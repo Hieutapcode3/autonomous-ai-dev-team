@@ -73,7 +73,9 @@ export default function ControlCenterPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          objective: "Build an order processing engine with tax calculation, unit tests, and validation.",
+          objective: "Implement a Block actor scoring system with ScriptableObject event channel.",
+          project_type: "unity",
+          project_path: "d:\\Unity\\Project\\ls004-block-home",
           max_iterations: 15,
         }),
       });
@@ -81,7 +83,12 @@ export default function ControlCenterPage() {
         const data = await res.json();
         setSessionId(data.session_id);
         setSessionState(data);
-        appendLog("Planner", `Generated initial DAG for session #${data.session_id} with ${Object.keys(data.tasks).length} subtasks.`);
+        appendLog(
+          "ContextLoader",
+          `Phase 0 Ingested: ${data.ingested_rules?.length || 0} Rules, ${data.ingested_skills?.length || 0} Skills for ${data.project_type?.toUpperCase()} [${data.project_path || "Sandbox"}]`,
+          "SUCCESS"
+        );
+        appendLog("Planner", `Generated initial DAG for session #${data.session_id} with ${Object.keys(data.tasks || {}).length} subtasks.`);
       }
     } catch {
       appendLog("System", "Could not reach backend server at " + API_BASE + ". Ensure python backend is running.", "WARN");
@@ -251,8 +258,10 @@ export default function ControlCenterPage() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            objective: sessionState?.objective || "Build an order processing engine with tax calculation, unit tests, and validation.",
+            objective: sessionState?.objective || "Implement a Block actor scoring system with ScriptableObject event channel.",
             cost_constrained: false,
+            project_type: sessionState?.project_type || "unity",
+            project_path: sessionState?.project_path || "d:\\Unity\\Project\\ls004-block-home",
             max_iterations: 15,
           }),
         });
@@ -284,7 +293,9 @@ export default function ControlCenterPage() {
   const handleCreateObjective = async (
     objective: string,
     costConstrained: boolean,
-    simulateFailure: boolean
+    simulateFailure: boolean,
+    projectType: string = "unity",
+    projectPath: string = ""
   ) => {
     try {
       const res = await fetch(`${API_BASE}/api/sessions`, {
@@ -293,6 +304,8 @@ export default function ControlCenterPage() {
         body: JSON.stringify({
           objective,
           cost_constrained: costConstrained,
+          project_type: projectType,
+          project_path: projectPath || null,
           max_iterations: 15,
         }),
       });
@@ -300,7 +313,12 @@ export default function ControlCenterPage() {
         const data = await res.json();
         setSessionId(data.session_id);
         setSessionState(data);
-        appendLog("Planner", `Created new session #${data.session_id} for goal: "${objective}"`);
+        appendLog(
+          "ContextLoader",
+          `Phase 0 Ingested: ${data.ingested_rules?.length || 0} Rules, ${data.ingested_skills?.length || 0} Skills for ${data.project_type?.toUpperCase()} [${data.project_path || "Sandbox"}]`,
+          "SUCCESS"
+        );
+        appendLog("Planner", `Created session #${data.session_id} with ${Object.keys(data.tasks || {}).length} subtasks.`);
 
         // If user wanted immediate run with simulation
         if (simulateFailure) {
@@ -359,6 +377,17 @@ export default function ControlCenterPage() {
 
         {/* Live link status & action controls */}
         <div className="flex items-center gap-3">
+          {sessionState && (
+            <div className="hidden md:flex items-center gap-2 px-3 py-1 rounded-full bg-slate-900 border border-slate-800 text-[11px] font-mono">
+              <span className={`w-2 h-2 rounded-full ${sessionState.project_type === "unity" ? "bg-purple-400" : "bg-cyan-400"}`} />
+              <span className="text-slate-300 font-bold uppercase">{sessionState.project_type || "GENERIC"}</span>
+              <span className="text-slate-600">•</span>
+              <span className="text-emerald-400 font-semibold" title={sessionState.context_summary || ""}>
+                {sessionState.ingested_rules?.length || 0} Rules / {sessionState.ingested_skills?.length || 0} Skills
+              </span>
+            </div>
+          )}
+
           <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-slate-900 border border-slate-800 text-xs font-mono">
             <span
               className={`w-2 h-2 rounded-full ${
@@ -449,13 +478,17 @@ export default function ControlCenterPage() {
           <SessionStats
             objective={sessionState?.objective || ""}
             iteration={sessionState?.iteration || 0}
-            maxIterations={sessionState?.max_iterations || 5}
+            maxIterations={sessionState?.max_iterations || 15}
             totalCostUsd={sessionState?.total_cost_usd || 0.0}
             totalEstimatedTimeSec={sessionState?.total_estimated_time_sec || 0}
             totalElapsedTimeSec={sessionState?.total_elapsed_time_sec || 0}
             status={sessionState?.status || "ready"}
             completedTasks={completedTasksCount}
             totalTasks={totalTasksCount}
+            projectType={sessionState?.project_type || "generic"}
+            projectPath={sessionState?.project_path}
+            ingestedRulesCount={sessionState?.ingested_rules?.length || 0}
+            ingestedSkillsCount={sessionState?.ingested_skills?.length || 0}
           />
 
           <AgentFleet fleetState={fleetState} modelCounts={modelCounts} />

@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { Target, RotateCcw, DollarSign, Activity, CheckCircle, AlertTriangle, Clock, Timer } from "lucide-react";
+import { Target, RotateCcw, DollarSign, Activity, CheckCircle, AlertTriangle, Clock, Timer, ShieldCheck, Gamepad2, Globe } from "lucide-react";
 
 interface SessionStatsProps {
   objective: string;
@@ -13,6 +13,10 @@ interface SessionStatsProps {
   status: string;
   completedTasks: number;
   totalTasks: number;
+  projectType?: string;
+  projectPath?: string;
+  ingestedRulesCount?: number;
+  ingestedSkillsCount?: number;
 }
 
 export function SessionStats({
@@ -25,8 +29,13 @@ export function SessionStats({
   status,
   completedTasks,
   totalTasks,
+  projectType = "generic",
+  projectPath,
+  ingestedRulesCount = 0,
+  ingestedSkillsCount = 0,
 }: SessionStatsProps) {
   const progressPercent = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+  const isUnity = projectType === "unity";
 
   const getStatusBadge = () => {
     switch (status.toLowerCase()) {
@@ -62,13 +71,29 @@ export function SessionStats({
   };
 
   return (
-    <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 backdrop-blur-md shadow-lg flex flex-col gap-3.5">
+    <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 backdrop-blur-md shadow-lg flex flex-col gap-3">
       <div className="flex items-center justify-between border-b border-slate-800/80 pb-2.5">
         <span className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-2">
           <Target className="w-4 h-4 text-cyan-400" />
           Objective & Session Stats
         </span>
         {getStatusBadge()}
+      </div>
+
+      {/* Target Project & Phase 0 Ingested Badge */}
+      <div className={`p-2.5 rounded-xl border flex items-center justify-between text-xs font-mono ${
+        isUnity
+          ? "bg-purple-950/40 border-purple-500/40 text-purple-300"
+          : "bg-cyan-950/40 border-cyan-500/40 text-cyan-300"
+      }`}>
+        <div className="flex items-center gap-2 truncate">
+          {isUnity ? <Gamepad2 className="w-4 h-4 text-purple-400 shrink-0" /> : <Globe className="w-4 h-4 text-cyan-400 shrink-0" />}
+          <span className="font-bold uppercase tracking-wider">{isUnity ? "Unity Game" : "Sandbox Web"}</span>
+        </div>
+        <div className="flex items-center gap-1.5 text-[11px] text-emerald-400 font-semibold shrink-0">
+          <ShieldCheck className="w-3.5 h-3.5" />
+          <span>{ingestedRulesCount} Rules • {ingestedSkillsCount} Skills</span>
+        </div>
       </div>
 
       <div className="text-sm font-medium text-slate-200 line-clamp-2 leading-relaxed bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/60">
