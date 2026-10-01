@@ -82,6 +82,9 @@ export function SettingsModal({ isOpen, onClose, apiUrl }: SettingsModalProps) {
           if (data?.ollama?.models?.length > 0 && !data.ollama.models.includes(ollamaModel)) {
             setOllamaModel(data.ollama.models[0]);
           }
+          if (data?.gemini_cli?.found && (!geminiCliCommand || geminiCliCommand === "gemini")) {
+            setGeminiCliCommand(data.gemini_cli.path || "gemini-cli");
+          }
         })
         .catch(() => {});
     }
@@ -234,7 +237,9 @@ export function SettingsModal({ isOpen, onClose, apiUrl }: SettingsModalProps) {
                         <Terminal className="w-3.5 h-3.5" /> Claude CLI
                       </span>
                       {localStatus?.claude_cli?.found && (
-                        <span className="w-2 h-2 rounded-full bg-emerald-400" title="Claude CLI Detected" />
+                        <span title="Claude CLI Detected">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                        </span>
                       )}
                     </div>
                     <span className="text-[10px] text-slate-400">Claude Code tool</span>
@@ -255,7 +260,9 @@ export function SettingsModal({ isOpen, onClose, apiUrl }: SettingsModalProps) {
                         <Sparkles className="w-3.5 h-3.5" /> Gemini CLI
                       </span>
                       {localStatus?.gemini_cli?.found && (
-                        <span className="w-2 h-2 rounded-full bg-emerald-400" title="Gemini CLI Detected" />
+                        <span title="Gemini CLI Detected">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                        </span>
                       )}
                     </div>
                     <span className="text-[10px] text-slate-400">Google Gemini CLI</span>

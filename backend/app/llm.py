@@ -421,15 +421,25 @@ class LLMClient:
         log_callback: Optional[Callable[[str, str, str], Awaitable[None]]] = None,
     ) -> Dict[str, Any]:
         """Execute task by spawning local Google Gemini CLI subprocess and streaming output."""
-        gemini_bin = shutil.which("gemini") or shutil.which("gemini.exe") or shutil.which("gemini.cmd")
+        gemini_bin = (
+            shutil.which("gemini-cli")
+            or shutil.which("gemini")
+            or shutil.which("gemini-cli.exe")
+            or shutil.which("gemini.exe")
+        )
         if not gemini_bin:
-            candidate_paths = [
-                os.path.expanduser("~\\AppData\\Local\\Programs\\Python\\Python312\\Scripts\\gemini.exe"),
-                os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "venv", "Scripts", "gemini.exe"),
+            candidate_dirs = [
+                os.path.expanduser("~\\AppData\\Local\\Programs\\Python\\Python312\\Scripts"),
+                os.path.expanduser("~\\AppData\\Roaming\\Python\\Python312\\Scripts"),
+                os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "venv", "Scripts"),
             ]
-            for p in candidate_paths:
-                if os.path.exists(p):
-                    gemini_bin = p
+            for d in candidate_dirs:
+                for fname in ["gemini-cli.exe", "gemini.exe", "gemini-cli.cmd", "gemini.cmd"]:
+                    full_p = os.path.join(d, fname)
+                    if os.path.exists(full_p):
+                        gemini_bin = full_p
+                        break
+                if gemini_bin:
                     break
 
         if not gemini_bin:
