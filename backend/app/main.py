@@ -171,14 +171,25 @@ async def get_local_status():
         if os.path.exists(local_p):
             claude_cli_path = local_p
 
-    gemini_cli_path = shutil.which("gemini") or shutil.which("gemini.exe") or shutil.which("gemini.cmd")
+    gemini_cli_path = (
+        shutil.which("gemini-cli")
+        or shutil.which("gemini")
+        or shutil.which("gemini-cli.exe")
+        or shutil.which("gemini.exe")
+    )
     if not gemini_cli_path:
-        for p in [
-            os.path.expanduser("~\\AppData\\Local\\Programs\\Python\\Python312\\Scripts\\gemini.exe"),
-            os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "venv", "Scripts", "gemini.exe"),
-        ]:
-            if os.path.exists(p):
-                gemini_cli_path = p
+        candidate_dirs = [
+            os.path.expanduser("~\\AppData\\Local\\Programs\\Python\\Python312\\Scripts"),
+            os.path.expanduser("~\\AppData\\Roaming\\Python\\Python312\\Scripts"),
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "venv", "Scripts"),
+        ]
+        for d in candidate_dirs:
+            for fname in ["gemini-cli.exe", "gemini.exe", "gemini-cli.cmd", "gemini.cmd"]:
+                full_path = os.path.join(d, fname)
+                if os.path.exists(full_path):
+                    gemini_cli_path = full_path
+                    break
+            if gemini_cli_path:
                 break
 
     return {
