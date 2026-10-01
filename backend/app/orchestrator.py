@@ -125,9 +125,13 @@ class TeamOrchestrator:
         )
         await self._broadcast("SESSION_UPDATED", self.state.model_dump())
 
-        while self.state.iteration < self.state.max_iterations:
-            self.state.total_elapsed_time_sec = round(time.time() - pipeline_start_time, 2)
-            uncompleted = [t for t in self.state.tasks.values() if t.status != TaskStatus.COMPLETED]
+        replan_count = 0
+        max_replans = self.state.max_iterations
+
+        while True:
+            superseded_ids = {t.retry_of for t in self.state.tasks.values() if t.retry_of}
+            active_tasks = [t for t in self.state.tasks.values() if t.task_id not in superseded_ids]
+            uncompleted = [t for t in active_tasks if t.status != TaskStatus.COMPLETED]
             if not uncompleted:
                 self.state.status = "completed"
                 self.state.total_elapsed_time_sec = round(time.time() - pipeline_start_time, 2)
@@ -248,23 +252,29 @@ class TeamOrchestrator:
                         "fix_task": fix_task.model_dump(),
                         "state": self.state.model_dump(),
                     })
+                    replan_count += 1
+                    self.state.iteration = replan_count
+                    if replan_count >= max_replans:
+                        await self._emit_log("Orchestrator", f"Max replanning iterations ({max_replans}) reached.", "ERROR")
+                        break
                     replan_needed = True
                     break
 
-            self.state.iteration += 1
             await asyncio.sleep(0.5)
 
             if replan_needed:
                 continue
 
         # If loop exited and tasks still uncompleted
-        uncompleted = [t for t in self.state.tasks.values() if t.status != TaskStatus.COMPLETED]
+        superseded_ids = {t.retry_of for t in self.state.tasks.values() if t.retry_of}
+        active_tasks = [t for t in self.state.tasks.values() if t.task_id not in superseded_ids]
+        uncompleted = [t for t in active_tasks if t.status != TaskStatus.COMPLETED]
         if uncompleted:
             self.state.status = "failed"
             await self._update_fleet("IDLE", "IDLE", "IDLE")
-            await self._emit_log("Orchestrator", "Max replanning iterations reached. Pipeline halted.", "ERROR")
+            await self._emit_log("Orchestrator", "DAG execution finished with uncompleted tasks.", "ERROR")
             await self._broadcast("RUN_FINISHED", {"status": "FAILED", "state": self.state.model_dump()})
-            return {"status": "FAILED", "message": "Max iterations reached.", "state": self.state.model_dump()}
+            return {"status": "FAILED", "message": "DAG stopped with uncompleted tasks.", "state": self.state.model_dump()}
 
         self.state.status = "completed"
         return {"status": "SUCCESS", "state": self.state.model_dump()}
