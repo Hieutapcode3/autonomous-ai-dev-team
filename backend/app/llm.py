@@ -391,8 +391,15 @@ class LLMClient:
         if proc.stdin:
             proc.stdin.close()
 
-        await asyncio.gather(read_stdout(), read_stderr())
-        await proc.wait()
+        try:
+            await asyncio.wait_for(asyncio.gather(read_stdout(), read_stderr()), timeout=60.0)
+            await asyncio.wait_for(proc.wait(), timeout=5.0)
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            raise RuntimeError("Claude CLI process timed out after 60s")
 
         full_stdout = "\n".join(stdout_lines)
 
@@ -495,8 +502,15 @@ class LLMClient:
         if proc.stdin:
             proc.stdin.close()
 
-        await asyncio.gather(read_stdout(), read_stderr())
-        await proc.wait()
+        try:
+            await asyncio.wait_for(asyncio.gather(read_stdout(), read_stderr()), timeout=60.0)
+            await asyncio.wait_for(proc.wait(), timeout=5.0)
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            raise RuntimeError("Gemini CLI process timed out after 60s")
 
         full_stdout = "\n".join(stdout_lines)
 

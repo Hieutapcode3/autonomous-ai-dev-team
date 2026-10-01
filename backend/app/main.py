@@ -82,6 +82,23 @@ async def create_session(req: CreateSessionRequest):
     return state
 
 
+@app.get("/api/sessions")
+async def list_sessions():
+    return {
+        "count": len(sessions),
+        "sessions": [
+            {
+                "session_id": sid,
+                "status": s.status,
+                "objective": s.objective,
+                "completed": len([t for t in s.tasks.values() if t.status == "completed"]),
+                "total": len(s.tasks),
+            }
+            for sid, s in sessions.items()
+        ]
+    }
+
+
 @app.get("/api/sessions/{session_id}", response_model=GlobalDAGState)
 async def get_session(session_id: str):
     if session_id not in sessions:

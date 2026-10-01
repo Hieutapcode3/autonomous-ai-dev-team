@@ -74,7 +74,7 @@ export default function ControlCenterPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           objective: "Build an order processing engine with tax calculation, unit tests, and validation.",
-          max_iterations: 5,
+          max_iterations: 15,
         }),
       });
       if (res.ok) {
@@ -92,9 +92,14 @@ export default function ControlCenterPage() {
     initDefaultSession();
   }, [initDefaultSession]);
 
-  // Connect WebSocket when sessionId changes
+  const [reconnectKey, setReconnectKey] = useState(0);
+
+  // Connect WebSocket when sessionId or reconnectKey changes
   useEffect(() => {
     if (!sessionId) return;
+
+    let isSubscribed = true;
+    let reconnectTimeout: NodeJS.Timeout;
 
     if (socketRef.current) {
       socketRef.current.close();
@@ -104,26 +109,29 @@ export default function ControlCenterPage() {
     socketRef.current = ws;
 
     ws.onopen = () => {
+      if (!isSubscribed) return;
       setIsConnected(true);
       appendLog("WebSocket", `Live link established for session #${sessionId}.`, "SUCCESS");
     };
 
     ws.onclose = () => {
+      if (!isSubscribed) return;
       setIsConnected(false);
       appendLog("WebSocket", "Session stream disconnected. Reconnecting in 2s...", "WARN");
-      setTimeout(() => {
-        if (sessionId) {
-          const newWs = new WebSocket(`${WS_BASE}/ws/${sessionId}`);
-          socketRef.current = newWs;
+      reconnectTimeout = setTimeout(() => {
+        if (isSubscribed) {
+          setReconnectKey((prev) => prev + 1);
         }
       }, 2000);
     };
 
     ws.onerror = () => {
+      if (!isSubscribed) return;
       setIsConnected(false);
     };
 
     ws.onmessage = (event) => {
+      if (!isSubscribed) return;
       try {
         const payload = JSON.parse(event.data);
         const { event_type, data } = payload;
@@ -199,25 +207,76 @@ export default function ControlCenterPage() {
     };
 
     return () => {
+      isSubscribed = false;
+      clearTimeout(reconnectTimeout);
       ws.close();
     };
-  }, [sessionId, appendLog]);
+  }, [sessionId, reconnectKey, appendLog]);
+
+  // Active fallback polling while running to guarantee UI progress sync
+  useEffect(() => {
+    if (!sessionId || sessionState?.status !== "running") return;
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/sessions/${sessionId}`);
+        if (res.ok) {
+          const freshState = await res.json();
+          setSessionState(freshState);
+        }
+      } catch {
+        // Ignore background polling errors
+      }
+    }, 1500);
+
+    return () => clearInterval(interval);
+  }, [sessionId, sessionState?.status]);
 
   // Handle Run
   const handleRunWorkflow = async (simulateFailure: boolean = false) => {
     if (!sessionId) return;
     try {
       appendLog("Orchestrator", `Triggering execution run (Simulate Failure: ${simulateFailure})...`);
-      const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/run`, {
+      let activeSid = sessionId;
+      let res = await fetch(`${API_BASE}/api/sessions/${activeSid}/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ simulate_failure: simulateFailure, cost_constrained: false }),
       });
+
+      // If backend restarted or session expired, auto-recreate and rerun
+      if (res.status === 404) {
+        appendLog("Orchestrator", "Session not found on backend (reloaded). Auto-recreating plan...", "WARN");
+        const createRes = await fetch(`${API_BASE}/api/sessions`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            objective: sessionState?.objective || "Build an order processing engine with tax calculation, unit tests, and validation.",
+            cost_constrained: false,
+            max_iterations: 15,
+          }),
+        });
+        if (createRes.ok) {
+          const freshData = await createRes.json();
+          activeSid = freshData.session_id;
+          setSessionId(activeSid);
+          setSessionState(freshData);
+          res = await fetch(`${API_BASE}/api/sessions/${activeSid}/run`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ simulate_failure: simulateFailure, cost_constrained: false }),
+          });
+        }
+      }
+
       if (res.ok) {
         setSessionState((prev: any) => ({ ...prev, status: "running" }));
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        appendLog("Orchestrator", `Failed to start run: ${errData.detail || res.statusText}`, "ERROR");
       }
     } catch {
-      appendLog("System", "Failed to start workflow execution.", "ERROR");
+      appendLog("System", "Failed to start workflow execution. Backend unreachable.", "ERROR");
     }
   };
 
@@ -234,7 +293,7 @@ export default function ControlCenterPage() {
         body: JSON.stringify({
           objective,
           cost_constrained: costConstrained,
-          max_iterations: 5,
+          max_iterations: 15,
         }),
       });
       if (res.ok) {
@@ -260,9 +319,11 @@ export default function ControlCenterPage() {
 
   if (sessionState?.tasks) {
     const tasksArray = Object.values(sessionState.tasks) as any[];
-    totalTasksCount = tasksArray.length;
+    const superseded = new Set(tasksArray.filter((t) => t.retry_of).map((t) => t.retry_of));
+    const activeTasks = tasksArray.filter((t) => !superseded.has(t.task_id));
+    totalTasksCount = activeTasks.length;
+    completedTasksCount = activeTasks.filter((t) => t.status === "completed").length;
     tasksArray.forEach((t) => {
-      if (t.status === "completed") completedTasksCount += 1;
       if (t.assigned_model) {
         modelCounts[t.assigned_model] = (modelCounts[t.assigned_model] || 0) + 1;
       }

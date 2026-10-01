@@ -61,7 +61,7 @@ class GlobalDAGState(BaseModel):
     tasks: Dict[str, SubTask] = Field(default_factory=dict)
     execution_order: List[List[str]] = Field(default_factory=list)
     iteration: int = 0
-    max_iterations: int = 5
+    max_iterations: int = 15
     total_cost_usd: float = 0.0
     total_estimated_time_sec: int = 0
     total_elapsed_time_sec: float = 0.0
