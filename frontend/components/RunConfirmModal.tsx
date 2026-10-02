@@ -44,10 +44,13 @@ export function RunConfirmModal({
     ollamaOnline: boolean;
     ollamaModel: string;
     hasCloudKey: boolean;
+    unityOnline: boolean;
+    unityUrl?: string;
   }>({
     ollamaOnline: false,
     ollamaModel: "qwen2.5-coder:7b",
     hasCloudKey: false,
+    unityOnline: false,
   });
 
   useEffect(() => {
@@ -58,7 +61,7 @@ export function RunConfirmModal({
       try {
         const [settingsRes, localRes] = await Promise.all([
           fetch(`${apiUrl}/api/settings`).then((r) => r.json()).catch(() => ({})),
-          fetch(`${apiUrl}/api/settings/local-status`).then((r) => r.json()).catch(() => ({})),
+          fetch(`${apiUrl}/api/local-status`).then((r) => r.json()).catch(() => ({})),
         ]);
 
         const hasKey = Boolean(
@@ -71,6 +74,8 @@ export function RunConfirmModal({
           ollamaOnline: Boolean(localRes?.ollama?.online),
           ollamaModel: settingsRes.ollama_model || "qwen2.5-coder:7b",
           hasCloudKey: hasKey,
+          unityOnline: Boolean(localRes?.unity_mcp?.online),
+          unityUrl: localRes?.unity_mcp?.url,
         });
       } catch {
         // Fallback on error
@@ -173,6 +178,22 @@ export function RunConfirmModal({
                 {sessionState?.ingested_skills?.length || 0} Specialized Skills
               </span>
             </div>
+
+            {projectType === "UNITY" && (
+              <div className={`p-2 rounded-lg text-xs flex items-center justify-between border ${
+                providerInfo.unityOnline
+                  ? "bg-purple-950/40 border-purple-500/30 text-purple-200"
+                  : "bg-rose-950/40 border-rose-500/40 text-rose-300"
+              }`}>
+                <div className="flex items-center gap-2 font-mono">
+                  <span className={`w-2 h-2 rounded-full ${providerInfo.unityOnline ? "bg-emerald-400 animate-pulse" : "bg-rose-400"}`} />
+                  <span>Unity MCP: {providerInfo.unityOnline ? `CONNECTED (${providerInfo.unityUrl || "http://127.0.0.1:8080"})` : "OFFLINE"}</span>
+                </div>
+                <span className="text-[10px] px-2 py-0.5 rounded bg-black/40 font-mono">
+                  {providerInfo.unityOnline ? "Live Compile Verification: READY" : "Warning: Offline"}
+                </span>
+              </div>
+            )}
           </div>
 
           {/* EXECUTION ENGINE SELECTION */}

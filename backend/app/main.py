@@ -24,6 +24,7 @@ from app.verifier import VerifierGate
 from app.planner import PlannerEngine
 from app.llm import LLMClient
 from app.orchestrator import TeamOrchestrator
+from app import unity_verifier
 
 
 app = FastAPI(title="Autonomous Multi-Agent Software Team API", version="1.0.0")
@@ -101,7 +102,20 @@ from app.context_loader import ProjectContextLoader
 @app.post("/api/sessions", response_model=GlobalDAGState)
 async def create_session(req: CreateSessionRequest):
     session_id = f"sess_{uuid.uuid4().hex[:8]}"
-    context = ProjectContextLoader.ingest(req.project_path, req.project_type)
+    project_path = req.project_path
+    project_type = req.project_type or "unity"
+
+    # Auto-detect project path from open Unity Editor if Unity project and path not set or invalid
+    if (not project_path or not os.path.exists(project_path)) and (project_type == "unity" or not req.project_path):
+        try:
+            unity_info = await unity_verifier.get_unity_project_info()
+            if unity_info and unity_info.get("projectRoot"):
+                project_path = unity_info["projectRoot"]
+                project_type = "unity"
+        except Exception:
+            pass
+
+    context = ProjectContextLoader.ingest(project_path, project_type)
     state = planner_engine.decompose_objective(
         session_id=session_id,
         objective=req.objective,
@@ -109,7 +123,7 @@ async def create_session(req: CreateSessionRequest):
         rules=context["rules"],
         skills=context["skills"],
     )
-    state.project_path = context["project_path"]
+    state.project_path = context["project_path"] or project_path
     state.project_type = context["project_type"]
     state.ingested_rules = context["rules"]
     state.ingested_skills = context["skills"]
@@ -333,6 +347,15 @@ async def run_session(session_id: str, opts: RunOptions = RunOptions()):
         has_anthropic_key=bool(llm_client.anthropic_key or os.getenv("ANTHROPIC_API_KEY")),
         has_openai_key=bool(llm_client.openai_key or os.getenv("OPENAI_API_KEY")),
     )
+    # Ensure active sandbox points to actual project_path
+    if (not state.project_path or not os.path.exists(state.project_path)) and state.project_type == "unity":
+        try:
+            unity_info = await unity_verifier.get_unity_project_info()
+            if unity_info and unity_info.get("projectRoot") and os.path.exists(unity_info["projectRoot"]):
+                state.project_path = unity_info["projectRoot"]
+        except Exception:
+            pass
+
     active_sandbox = (
         SandboxRuntime(base_workspace=state.project_path)
         if state.project_path and os.path.exists(state.project_path)
@@ -420,6 +443,14 @@ async def get_local_status():
             if gemini_cli_path:
                 break
 
+    unity_online = False
+    unity_url = None
+    try:
+        unity_online = await unity_verifier.is_unity_reachable()
+        unity_url = unity_verifier._session.base_url
+    except Exception:
+        pass
+
     return {
         "ollama": {
             "online": ollama_online,
@@ -435,6 +466,56 @@ async def get_local_status():
             "path": gemini_cli_path,
             "authenticated": bool(llm_client.google_key or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY") or os.path.exists(os.path.expanduser("~/.config/gemini-cli.toml"))),
         },
+        "unity_mcp": {
+            "online": unity_online,
+            "url": unity_url,
+        },
+    }
+
+
+@app.get("/api/unity/status")
+async def get_unity_status():
+    """Check Unity MCP bridge health, connection info, and editor state."""
+    online = await unity_verifier.is_unity_reachable()
+    state = {}
+    if online:
+        try:
+            state = await unity_verifier._session.read_resource("mcpforunity://editor/state")
+        except Exception:
+            pass
+    return {
+        "online": online,
+        "url": unity_verifier._session.base_url,
+        "state": state,
+    }
+
+
+@app.post("/api/unity/refresh")
+async def trigger_unity_refresh():
+    """Trigger force refresh and compilation in the Unity Editor."""
+    online = await unity_verifier.is_unity_reachable()
+    if not online:
+        raise HTTPException(status_code=503, detail="Unity MCP bridge is offline. Open Unity with MCP for Unity active.")
+    ready = await unity_verifier.refresh_and_wait()
+    errors = await unity_verifier.read_compile_errors()
+    return {
+        "success": ready,
+        "editor_ready": ready,
+        "compile_errors": errors,
+        "error_count": len(errors),
+    }
+
+
+@app.get("/api/unity/console")
+async def get_unity_console():
+    """Retrieve current error messages from Unity Editor console."""
+    online = await unity_verifier.is_unity_reachable()
+    if not online:
+        raise HTTPException(status_code=503, detail="Unity MCP bridge is offline.")
+    errors = await unity_verifier.read_compile_errors()
+    return {
+        "errors": errors,
+        "count": len(errors),
     }
 
 

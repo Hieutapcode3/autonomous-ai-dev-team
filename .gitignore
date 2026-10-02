@@ -42,11 +42,13 @@ desktop.ini
 *.swp
 *.swo
 
-# Secrets
+# Secrets & local settings
 .env.local
 .env.*.local
 *.pem
 *.key
+backend/settings.json
+settings.json
 
 # Sandbox workspace output (runtime generated)
 workspace_sandbox/

@@ -58,10 +58,18 @@ class VerifierGate:
                 all_passed = False
                 error_logs.append(rule_check["error"])
 
-        # 2. Unity MCP live compile verification (for Unity projects with .cs files)
-        is_unity_project = any(f.endswith(".cs") for f in created_files) or (self.sandbox.workspace / "Assets").exists()
+        # 2. Unity MCP live compile verification (for Unity projects with .cs files or QA tasks)
+        is_unity_project = (
+            any(f.endswith(".cs") for f in created_files)
+            or (self.sandbox.workspace / "Assets").exists()
+            or (task.domain == TaskDomain.VERIFICATION and "unity" in (task.assigned_agent or "").lower())
+        )
+        should_verify_unity = is_unity_project and (
+            any(f.endswith(".cs") for f in created_files)
+            or task.domain == TaskDomain.VERIFICATION
+        )
 
-        if all_passed and is_unity_project and created_files:
+        if all_passed and should_verify_unity:
             unity_result = await unity_verifier.verify_unity_compilation(
                 changed_files=created_files,
                 log=log_callback,
@@ -69,18 +77,18 @@ class VerifierGate:
             for ck in unity_result.get("checks", []):
                 checks.append(ck)
 
-            if unity_result["unity_available"] and not unity_result["compile_passed"]:
+            if not unity_result.get("compile_passed", False):
                 all_passed = False
-                err_summary = unity_result["error_summary"]
+                err_summary = unity_result.get("error_summary", "Unity compilation verification failed.")
                 error_logs.append(
-                    f"Unity Compile Errors (from Editor console):\n{err_summary}"
+                    f"Unity Compile Quality Gate REJECTED:\n{err_summary}"
                 )
         elif all_passed and is_unity_project:
-            # No files changed but it's a Unity project — mark as passed
+            # Non-code task (e.g. analysis/architecture) without C# file changes
             checks.append({
                 "check": "unity_csharp_validation",
                 "passed": True,
-                "output": "No C# changes in this task — Unity compile check skipped.",
+                "output": f"Task domain '{task.domain.value}' produced no C# changes — compiler check not applicable.",
             })
 
         elif all_passed and (task.domain in [TaskDomain.IMPLEMENTATION, TaskDomain.VERIFICATION]):

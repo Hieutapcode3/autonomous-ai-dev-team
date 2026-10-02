@@ -50,6 +50,12 @@ export function TaskModal({ isOpen, onClose, onSubmit, initialObjective }: TaskM
   const [referenceMedia, setReferenceMedia] = useState<ReferenceMediaItem[]>([]);
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [unityStatus, setUnityStatus] = useState<{
+    online: boolean;
+    url?: string;
+    projectRoot?: string;
+    projectName?: string;
+  } | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -60,6 +66,28 @@ export function TaskModal({ isOpen, onClose, onSubmit, initialObjective }: TaskM
       }
     }
   }, []);
+
+  useEffect(() => {
+    if (isOpen) {
+      fetch("http://localhost:8000/api/unity/status")
+        .then((res) => res.json())
+        .then((data) => {
+          const projectInfo = data?.state?.data;
+          setUnityStatus({
+            online: !!data.online,
+            url: data.url,
+            projectRoot: projectInfo?.projectRoot,
+            projectName: projectInfo?.projectName,
+          });
+          if (data.online && projectInfo?.projectRoot && projectType === "unity") {
+            setProjectPath(projectInfo.projectRoot);
+          }
+        })
+        .catch(() => {
+          setUnityStatus({ online: false });
+        });
+    }
+  }, [isOpen, projectType]);
 
   useEffect(() => {
     if (isOpen) {
@@ -247,6 +275,27 @@ export function TaskModal({ isOpen, onClose, onSubmit, initialObjective }: TaskM
                 ))}
               </div>
             )}
+
+            {projectType === "unity" && (
+              <div className={`p-2 rounded-lg text-xs flex items-center justify-between border ${
+                unityStatus?.online
+                  ? "bg-emerald-950/40 border-emerald-500/40 text-emerald-300"
+                  : "bg-rose-950/40 border-rose-500/40 text-rose-300"
+              }`}>
+                <div className="flex items-center gap-2">
+                  <span className={`w-2 h-2 rounded-full ${unityStatus?.online ? "bg-emerald-400 animate-pulse" : "bg-rose-400"}`} />
+                  <span className="font-medium">
+                    {unityStatus?.online
+                      ? `Unity MCP Connected: ${unityStatus.projectName || "Active Editor"} (${unityStatus.url})`
+                      : "Unity MCP Offline — Open Unity Editor with MCP for Unity active to allow compile verification"}
+                  </span>
+                </div>
+                <span className="text-[10px] px-2 py-0.5 rounded bg-black/40 font-mono">
+                  {unityStatus?.online ? "Compile Verification: ACTIVE" : "Mandatory Gate"}
+                </span>
+              </div>
+            )}
+
             <div className="flex items-center gap-1.5 text-[10px] text-emerald-400">
               <ShieldCheck className="w-3.5 h-3.5" />
               <span>

@@ -1,116 +1,252 @@
 """
 Unity MCP Verifier
-Connects to the running Unity Editor via its MCP HTTP bridge (localhost:8090 by default).
-After the sandbox writes .cs files into the project, this module triggers a reimport+compile,
-waits until the editor is ready, then reads the console for errors.
+Connects to the running Unity Editor via its MCP HTTP bridge (auto-discovering port 8080/8090).
+Triggers a force refresh + compilation, polls until the editor is ready, and verifies
+zero errors exist in the Unity Editor console.
+
+MANDATORY GATE:
+If Unity MCP is not reachable or if compilation has any errors, the verification MUST FAIL.
+Skipping this step is explicitly prohibited.
 """
 
 import asyncio
 import httpx
 import json
 import os
+import glob
+from pathlib import Path
 from typing import Dict, Any, List, Optional, Callable, Awaitable
 
-# Unity MCP bridge URL — matches the port used by the MCP for Unity plugin
-UNITY_MCP_URL = os.getenv("UNITY_MCP_URL", "http://localhost:8090")
-MCP_TIMEOUT = float(os.getenv("UNITY_MCP_TIMEOUT", "60"))
+DEFAULT_TIMEOUT = float(os.getenv("UNITY_MCP_TIMEOUT", "60"))
+CANDIDATE_URLS = [
+    os.getenv("UNITY_MCP_URL", ""),
+    "http://127.0.0.1:8080",
+    "http://localhost:8080",
+    "http://127.0.0.1:8090",
+    "http://localhost:8090",
+]
 
 
-async def _mcp_call(
-    tool: str,
-    params: Dict[str, Any],
-    log: Optional[Callable[[str, str, str], Awaitable[None]]] = None,
-) -> Dict[str, Any]:
-    """POST a tool call to the Unity MCP bridge and return the result dict."""
-    payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": tool, "arguments": params}}
-    async with httpx.AsyncClient(timeout=MCP_TIMEOUT) as client:
-        resp = await client.post(f"{UNITY_MCP_URL}/mcp", json=payload)
-        resp.raise_for_status()
-        body = resp.json()
-        if "error" in body:
-            raise RuntimeError(f"Unity MCP error: {body['error']}")
-        # Result is under body["result"]["content"][0]["text"] (JSON string)
-        content = body.get("result", {}).get("content", [])
-        if content and isinstance(content[0], dict):
-            text = content[0].get("text", "{}")
+class UnityMcpSession:
+    def __init__(self):
+        self.base_url: Optional[str] = None
+        self.session_id: Optional[str] = None
+        self._lock = asyncio.Lock()
+
+    @staticmethod
+    def _parse_mcp_response(text: str) -> Dict[str, Any]:
+        """Parse either plain JSON or SSE (event: message / data: {...}) responses."""
+        text = text.strip()
+        if text.startswith("{"):
+            return json.loads(text)
+        for line in text.splitlines():
+            if line.startswith("data:"):
+                data_str = line[5:].strip()
+                if data_str:
+                    return json.loads(data_str)
+        raise ValueError(f"Could not parse MCP response: {text[:150]}")
+
+    async def _try_handshake(self, client: httpx.AsyncClient, base_url: str) -> Optional[str]:
+        """Perform MCP initialize handshake and return session ID if successful."""
+        headers = {
+            "Accept": "application/json, text/event-stream",
+            "Content-Type": "application/json",
+        }
+        init_payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "multi-agent-verifier", "version": "1.0.0"},
+            },
+        }
+        endpoint = f"{base_url.rstrip('/')}/mcp"
+        resp = await client.post(endpoint, json=init_payload, headers=headers)
+        if resp.status_code != 200:
+            return None
+
+        sid = resp.headers.get("mcp-session-id")
+        if not sid:
             try:
-                return json.loads(text)
+                data = self._parse_mcp_response(resp.text)
+                sid = data.get("result", {}).get("sessionId")
             except Exception:
-                return {"raw": text}
-        return body.get("result", {})
+                sid = None
 
-
-async def _read_editor_state(log=None) -> Dict[str, Any]:
-    """Read mcpforunity://editor/state to check compilation status."""
-    payload = {"jsonrpc": "2.0", "id": 2, "method": "resources/read", "params": {"uri": "mcpforunity://editor/state"}}
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(f"{UNITY_MCP_URL}/mcp", json=payload)
-        resp.raise_for_status()
-        body = resp.json()
-        contents = body.get("result", {}).get("contents", [])
-        if contents:
-            text = contents[0].get("text", "{}")
+        if sid:
+            h2 = {**headers, "mcp-session-id": sid}
             try:
-                return json.loads(text)
+                await client.post(endpoint, json={"jsonrpc": "2.0", "method": "notifications/initialized"}, headers=h2)
             except Exception:
                 pass
-        return {}
+        return sid
+
+    async def get_active_session(self) -> tuple[str, str]:
+        """Return (base_url, session_id), discovering or reconnecting if needed."""
+        async with self._lock:
+            # If current session is still healthy, reuse it
+            if self.base_url and self.session_id:
+                try:
+                    headers = {
+                        "Accept": "application/json, text/event-stream",
+                        "Content-Type": "application/json",
+                        "mcp-session-id": self.session_id,
+                    }
+                    async with httpx.AsyncClient(timeout=3.0) as client:
+                        r = await client.post(
+                            f"{self.base_url}/mcp",
+                            json={"jsonrpc": "2.0", "id": 0, "method": "tools/list", "params": {}},
+                            headers=headers,
+                        )
+                        if r.status_code == 200:
+                            return self.base_url, self.session_id
+                except Exception:
+                    self.session_id = None
+
+            # Build list of URLs to test
+            candidates = []
+            for u in CANDIDATE_URLS:
+                if u and u not in candidates:
+                    candidates.append(u.rstrip("/"))
+
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                for candidate in candidates:
+                    try:
+                        sid = await self._try_handshake(client, candidate)
+                        if sid:
+                            self.base_url = candidate
+                            self.session_id = sid
+                            return self.base_url, self.session_id
+                    except Exception:
+                        continue
+
+            raise ConnectionError(
+                f"Could not connect to Unity MCP at any candidate URL: {candidates}. "
+                "Ensure Unity Editor is open with MCP for Unity running."
+            )
+
+    async def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Invoke an MCP tool on the active session."""
+        base_url, sid = await self.get_active_session()
+        headers = {
+            "Accept": "application/json, text/event-stream",
+            "Content-Type": "application/json",
+            "mcp-session-id": sid,
+        }
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 10,
+            "method": "tools/call",
+            "params": {"name": tool_name, "arguments": arguments},
+        }
+        async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+            resp = await client.post(f"{base_url}/mcp", json=payload, headers=headers)
+            resp.raise_for_status()
+            parsed = self._parse_mcp_response(resp.text)
+            if "error" in parsed:
+                raise RuntimeError(f"Unity MCP tool '{tool_name}' returned error: {parsed['error']}")
+
+            result = parsed.get("result", {})
+            if "structuredContent" in result and isinstance(result["structuredContent"], dict):
+                return result["structuredContent"]
+
+            content = result.get("content", [])
+            if content and isinstance(content[0], dict):
+                raw_text = content[0].get("text", "{}")
+                try:
+                    return json.loads(raw_text)
+                except Exception:
+                    return {"text": raw_text}
+            return result
+
+    async def read_resource(self, uri: str) -> Dict[str, Any]:
+        """Read an MCP resource on the active session."""
+        base_url, sid = await self.get_active_session()
+        headers = {
+            "Accept": "application/json, text/event-stream",
+            "Content-Type": "application/json",
+            "mcp-session-id": sid,
+        }
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 20,
+            "method": "resources/read",
+            "params": {"uri": uri},
+        }
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(f"{base_url}/mcp", json=payload, headers=headers)
+            resp.raise_for_status()
+            parsed = self._parse_mcp_response(resp.text)
+            contents = parsed.get("result", {}).get("contents", [])
+            if contents and isinstance(contents[0], dict):
+                raw_text = contents[0].get("text", "{}")
+                try:
+                    return json.loads(raw_text)
+                except Exception:
+                    return {"text": raw_text}
+            return {}
+
+
+_session = UnityMcpSession()
 
 
 async def is_unity_reachable() -> bool:
-    """Quick ping to check if Unity Editor MCP bridge is running."""
+    """Check if Unity Editor MCP bridge is online and responding."""
     try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            payload = {"jsonrpc": "2.0", "id": 0, "method": "tools/list", "params": {}}
-            resp = await client.post(f"{UNITY_MCP_URL}/mcp", json=payload)
-            return resp.status_code == 200
+        await _session.get_active_session()
+        return True
     except Exception:
         return False
 
 
 async def refresh_and_wait(
     log: Optional[Callable[[str, str, str], Awaitable[None]]] = None,
-    max_wait_sec: float = 90,
+    max_wait_sec: float = 90.0,
 ) -> bool:
     """
-    Trigger Unity asset refresh + script compilation, then wait until ready.
-    Returns True if the editor became ready within max_wait_sec.
+    Trigger Unity asset refresh and script compilation, then poll editor state
+    until domain reload and compilation are finished and editor is ready.
     """
+    if log:
+        await log("UnityMCP", "Requesting Unity asset refresh and compilation (mode=force, compile=request)...", "INFO")
     try:
-        await _mcp_call("refresh_unity", {
+        ref_res = await _session.call_tool("refresh_unity", {
             "mode": "force",
             "scope": "all",
             "compile": "request",
             "wait_for_ready": True,
-        }, log)
+        })
+        msg = ref_res.get("message", "Refresh requested")
         if log:
-            await log("UnityMCP", "Refresh + compile requested. Waiting for editor to become ready...", "INFO")
+            await log("UnityMCP", f"Refresh command sent: {msg}. Waiting for editor compilation...", "INFO")
     except Exception as e:
         if log:
-            await log("UnityMCP", f"refresh_unity failed: {e}", "WARN")
+            await log("UnityMCP", f"Failed to call refresh_unity: {e}", "ERROR")
         return False
 
-    # Poll editor state until ready or timeout
+    # Poll editor state until ready
     waited = 0.0
-    poll_interval = 3.0
+    poll_interval = 2.0
     while waited < max_wait_sec:
         await asyncio.sleep(poll_interval)
         waited += poll_interval
         try:
-            state = await _read_editor_state(log)
+            state = await _session.read_resource("mcpforunity://editor/state")
             data = state.get("data", state)
             is_compiling = data.get("compilation", {}).get("is_compiling", False)
             ready = data.get("advice", {}).get("ready_for_tools", True)
             if log:
-                await log("UnityMCP", f"Editor state — compiling={is_compiling}, ready={ready} ({waited:.0f}s elapsed)", "INFO")
+                await log("UnityMCP", f"Unity state: compiling={is_compiling}, ready_for_tools={ready} ({waited:.1f}s)", "INFO")
             if not is_compiling and ready:
                 return True
         except Exception as e:
             if log:
-                await log("UnityMCP", f"Polling editor state failed: {e}", "WARN")
+                await log("UnityMCP", f"Polling editor state: {e}", "WARN")
 
     if log:
-        await log("UnityMCP", f"Editor did not become ready within {max_wait_sec}s.", "WARN")
+        await log("UnityMCP", f"Unity compilation did not reach ready state within {max_wait_sec}s.", "WARN")
     return False
 
 
@@ -118,27 +254,37 @@ async def read_compile_errors(
     log: Optional[Callable[[str, str, str], Awaitable[None]]] = None,
 ) -> List[Dict[str, Any]]:
     """
-    Read the Unity console and extract only Error-level messages.
-    Returns a list of dicts: {message, stacktrace, type}
+    Read the Unity console and extract all Error/Exception level messages.
+    Returns list of dicts: {message, stacktrace, file, line, type}
     """
     try:
-        result = await _mcp_call("read_console", {
+        result = await _session.call_tool("read_console", {
             "action": "get",
             "types": ["error"],
             "count": "50",
             "format": "json",
             "include_stacktrace": True,
-        }, log)
+        })
 
-        messages = result.get("messages", result.get("logs", []))
+        raw_list = result.get("data", result.get("messages", result.get("logs", [])))
+        if not isinstance(raw_list, list):
+            raw_list = []
+
         errors = []
-        for m in messages:
-            msg_type = str(m.get("type", "")).lower()
-            if "error" in msg_type or "exception" in msg_type:
+        for item in raw_list:
+            if not isinstance(item, dict):
+                continue
+            msg_type = str(item.get("type", "")).lower()
+            msg = item.get("message", item.get("text", ""))
+            if not msg:
+                continue
+            if any(k in msg_type for k in ("error", "exception", "assert")) or "error" in msg.lower():
                 errors.append({
-                    "message": m.get("message", m.get("text", "")),
-                    "stacktrace": m.get("stacktrace", ""),
-                    "type": msg_type,
+                    "message": msg,
+                    "stacktrace": item.get("stackTrace") or item.get("stacktrace") or "",
+                    "file": item.get("file", ""),
+                    "line": item.get("line", 0),
+                    "type": item.get("type", "Error"),
                 })
         return errors
     except Exception as e:
@@ -152,107 +298,129 @@ async def verify_unity_compilation(
     log: Optional[Callable[[str, str, str], Awaitable[None]]] = None,
 ) -> Dict[str, Any]:
     """
-    Main entry point called by the Verifier after sandbox writes files.
-
-    Steps:
-      1. Check Unity is reachable — skip gracefully if not
-      2. Clear console, trigger refresh + compile, wait for ready
-      3. Read errors from console
-      4. For each .cs file changed, also run validate_script for individual diagnostics
-
-    Returns:
-      {
-        "unity_available": bool,
-        "compile_passed": bool,
-        "errors": [...],
-        "error_summary": str,
-        "checks": [...],
-      }
+    Main verification gate for Unity projects.
+    Enforces mandatory refresh and console error verification.
+    NEVER silently passes if Unity is offline or if errors exist.
     """
     if log:
-        await log("UnityMCP", "Starting Unity compile verification...", "INFO")
+        await log("UnityMCP", "Connecting to Unity Editor via MCP bridge...", "INFO")
 
-    # 1. Reachability check
     reachable = await is_unity_reachable()
     if not reachable:
+        err_msg = (
+            "FATAL: Unity Editor MCP bridge is offline or unreachable. "
+            "Verification CANNOT be skipped — unverified code will cause broken scripts in Unity. "
+            "Please ensure Unity Editor is open with MCP for Unity running (listening on port 8080/8090)."
+        )
         if log:
-            await log("UnityMCP", "Unity Editor MCP bridge is not reachable. Skipping live compile check.", "WARN")
+            await log("UnityMCP", err_msg, "ERROR")
         return {
             "unity_available": False,
-            "compile_passed": True,  # Don't block if Unity not running
-            "errors": [],
-            "error_summary": "Unity Editor not connected — live compile check skipped.",
-            "checks": [{"check": "unity_reachability", "passed": True, "output": "Unity MCP not available — check skipped."}],
+            "compile_passed": False,  # FAIL HARD — do not skip!
+            "errors": [{"message": err_msg, "type": "Error"}],
+            "error_summary": err_msg,
+            "checks": [{"check": "unity_mcp_connectivity", "passed": False, "output": err_msg}],
         }
 
     checks = []
+    checks.append({"check": "unity_mcp_connectivity", "passed": True, "output": f"Connected to Unity MCP at {_session.base_url}"})
+    if log:
+        await log("UnityMCP", f"Connected to Unity MCP at {_session.base_url}. Clearing console...", "INFO")
 
-    # 2. Clear console first so old errors don't contaminate
+    # 1. Clear old console messages to avoid false positives
     try:
-        await _mcp_call("read_console", {"action": "clear"}, log)
+        await _session.call_tool("read_console", {"action": "clear"})
+    except Exception as e:
         if log:
-            await log("UnityMCP", "Console cleared.", "INFO")
-    except Exception:
-        pass
+            await log("UnityMCP", f"Console clear note: {e}", "WARN")
 
-    # 3. Refresh + compile + wait
+    # 2. Trigger force refresh + compile and wait
     ready = await refresh_and_wait(log)
     checks.append({
         "check": "unity_refresh_compile",
         "passed": ready,
-        "output": "Editor ready after compile." if ready else "Editor did not reach ready state in time.",
+        "output": "Editor ready after compilation." if ready else "Editor compilation timed out.",
     })
+    if not ready:
+        return {
+            "unity_available": True,
+            "compile_passed": False,
+            "errors": [{"message": "Unity Editor did not finish compiling within timeout.", "type": "Error"}],
+            "error_summary": "Unity Editor compilation timed out or editor hung.",
+            "checks": checks,
+        }
 
-    # 4. Per-file validate_script for individual diagnostics
+    # 3. Validate individual changed .cs scripts via validate_script tool
     cs_files = [f for f in changed_files if f.endswith(".cs")]
     for cs_file in cs_files:
-        # Normalize to Assets/... path for Unity MCP
         uri = cs_file if cs_file.startswith("Assets/") else f"Assets/{cs_file.lstrip('/')}"
         try:
-            vresult = await _mcp_call("validate_script", {
+            vresult = await _session.call_tool("validate_script", {
                 "uri": uri,
                 "level": "standard",
                 "include_diagnostics": True,
-            }, log)
+            })
             file_passed = vresult.get("is_valid", vresult.get("valid", True))
             diags = vresult.get("diagnostics", [])
-            diag_text = "; ".join([d.get("message", "") for d in diags if d.get("severity", "") in ("error", "Error")])
+            diag_msgs = [d.get("message", "") for d in diags if str(d.get("severity", "")).lower() in ("error", "fatal")]
+            diag_text = "; ".join(diag_msgs)
+            passed = file_passed and not diag_text
             checks.append({
                 "check": f"validate_script:{cs_file}",
-                "passed": file_passed and not diag_text,
+                "passed": passed,
                 "output": diag_text or "Script diagnostics clean.",
                 "file": cs_file,
             })
             if log:
-                status = "PASS" if (file_passed and not diag_text) else "FAIL"
-                await log("UnityMCP", f"validate_script [{cs_file}]: {status} {diag_text[:100] if diag_text else ''}", "SUCCESS" if status == "PASS" else "ERROR")
+                lvl = "SUCCESS" if passed else "ERROR"
+                await log("UnityMCP", f"validate_script [{cs_file}]: {'PASS' if passed else 'FAIL'} {diag_text}", lvl)
         except Exception as e:
-            checks.append({"check": f"validate_script:{cs_file}", "passed": True, "output": f"Skipped: {e}"})
+            checks.append({"check": f"validate_script:{cs_file}", "passed": True, "output": f"Notice: {e}"})
 
-    # 5. Read console errors
-    await asyncio.sleep(2.0)  # Extra buffer after compile settles
+    # 4. Settle buffer & Read console errors
+    await asyncio.sleep(2.0)
     errors = await read_compile_errors(log)
 
-    if errors and log:
-        await log("UnityMCP", f"Found {len(errors)} compile error(s) in Unity console.", "ERROR")
-        for err in errors[:5]:
-            await log("UnityMCP", f"  [ERROR] {err['message'][:200]}", "ERROR")
+    if errors:
+        error_lines = []
+        for i, err in enumerate(errors, 1):
+            loc = f" ({err['file']}:{err['line']})" if err.get("file") else ""
+            error_lines.append(f"[{i}] {err['message']}{loc}")
+        error_summary = "\n".join(error_lines)
 
-    compile_passed = len(errors) == 0
-    error_summary = ""
-    if not compile_passed:
-        lines = [f"[{i+1}] {e['message']}" for i, e in enumerate(errors)]
-        error_summary = "\n".join(lines)
-        checks.append({"check": "unity_console_errors", "passed": False, "output": error_summary})
-    else:
-        checks.append({"check": "unity_console_errors", "passed": True, "output": "No errors in Unity console."})
         if log:
-            await log("UnityMCP", "Unity compile verification PASSED — no errors in console.", "SUCCESS")
+            await log("UnityMCP", f"REJECTED: Found {len(errors)} compile error(s) in Unity console:\n{error_summary}", "ERROR")
+
+        checks.append({"check": "unity_console_errors", "passed": False, "output": error_summary})
+        return {
+            "unity_available": True,
+            "compile_passed": False,
+            "errors": errors,
+            "error_summary": error_summary,
+            "checks": checks,
+        }
+
+    checks.append({"check": "unity_console_errors", "passed": True, "output": "Unity Console is completely clean. 0 errors found."})
+    if log:
+        await log("UnityMCP", "Unity compile verification PASSED — zero compilation errors in Editor console.", "SUCCESS")
 
     return {
         "unity_available": True,
-        "compile_passed": compile_passed,
-        "errors": errors,
-        "error_summary": error_summary,
+        "compile_passed": True,
+        "errors": [],
+        "error_summary": "",
         "checks": checks,
     }
+
+
+async def get_unity_project_info() -> Optional[Dict[str, Any]]:
+    """Query mcpforunity://project/info for projectRoot and assetsPath."""
+    try:
+        online = await is_unity_reachable()
+        if not online:
+            return None
+        info = await _session.read_resource("mcpforunity://project/info")
+        data = info.get("data", info)
+        return data
+    except Exception:
+        return None
