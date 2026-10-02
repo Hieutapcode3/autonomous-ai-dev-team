@@ -16,6 +16,7 @@ import {
   Server,
   Zap,
   Sparkles,
+  AlertCircle,
 } from "lucide-react";
 
 interface SettingsModalProps {
@@ -37,6 +38,7 @@ interface LocalStatus {
   gemini_cli: {
     found: boolean;
     path: string | null;
+    authenticated?: boolean;
   };
 }
 
@@ -260,9 +262,15 @@ export function SettingsModal({ isOpen, onClose, apiUrl }: SettingsModalProps) {
                         <Sparkles className="w-3.5 h-3.5" /> Gemini CLI
                       </span>
                       {localStatus?.gemini_cli?.found && (
-                        <span title="Gemini CLI Detected">
-                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                        </span>
+                        localStatus?.gemini_cli?.authenticated ? (
+                          <span title="Gemini CLI Ready">
+                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                          </span>
+                        ) : (
+                          <span title="Gemini CLI detected but requires API Key" className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-amber-950/80 text-amber-300 border border-amber-500/40">
+                            Needs Key
+                          </span>
+                        )
                       )}
                     </div>
                     <span className="text-[10px] text-slate-400">Google Gemini CLI</span>
@@ -353,9 +361,15 @@ export function SettingsModal({ isOpen, onClose, apiUrl }: SettingsModalProps) {
                       </p>
                       <div className="mt-2 text-[10px] text-slate-400 flex items-center justify-between">
                         {localStatus?.gemini_cli?.found ? (
-                          <span className="text-emerald-400 flex items-center gap-1">
-                            <Check className="w-3 h-3" /> Detected: {localStatus.gemini_cli.path}
-                          </span>
+                          localStatus?.gemini_cli?.authenticated ? (
+                            <span className="text-emerald-400 flex items-center gap-1">
+                              <Check className="w-3 h-3" /> Ready &amp; Authenticated: {localStatus.gemini_cli.path}
+                            </span>
+                          ) : (
+                            <span className="text-amber-400 flex items-center gap-1">
+                              <AlertCircle className="w-3 h-3" /> Detected, but requires API Key in field below.
+                            </span>
+                          )
                         ) : (
                           <span className="text-amber-400">
                             Install CLI via: <code className="font-mono bg-slate-900 px-1 py-0.5 rounded text-amber-200">pip install gemini-cli</code>
