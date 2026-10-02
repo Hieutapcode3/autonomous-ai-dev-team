@@ -46,10 +46,22 @@ app.add_middleware(
 sessions: Dict[str, GlobalDAGState] = {}
 orchestrators: Dict[str, TeamOrchestrator] = {}
 active_connections: Dict[str, List[WebSocket]] = {}
+from app.settings_manager import load_settings, save_settings, mask_key
+
 sandbox_runtime = SandboxRuntime()
 planner_engine = PlannerEngine()
+current_settings = load_settings()
 llm_client = LLMClient()
-current_settings = ConfigSettings()
+if current_settings.anthropic_api_key:
+    llm_client.anthropic_key = current_settings.anthropic_api_key
+if current_settings.openai_api_key:
+    llm_client.openai_key = current_settings.openai_api_key
+if current_settings.google_api_key:
+    llm_client.google_key = current_settings.google_api_key
+if current_settings.openrouter_api_key:
+    llm_client.openrouter_key = current_settings.openrouter_api_key
+if current_settings.ollama_base_url:
+    llm_client.ollama_base_url = current_settings.ollama_base_url
 
 
 class ConnectionManager:
@@ -303,6 +315,10 @@ async def run_session(session_id: str, opts: RunOptions = RunOptions()):
         or llm_client.openai_key
         or llm_client.google_key
         or llm_client.openrouter_key
+        or os.getenv("GOOGLE_API_KEY")
+        or os.getenv("GEMINI_API_KEY")
+        or os.getenv("ANTHROPIC_API_KEY")
+        or os.getenv("OPENAI_API_KEY")
     )
     use_local = current_settings.use_local_provider or (not sim_mode and not has_cloud_keys)
 
@@ -312,6 +328,10 @@ async def run_session(session_id: str, opts: RunOptions = RunOptions()):
         use_local_provider=use_local,
         local_provider_type=current_settings.local_provider_type,
         ollama_model=current_settings.ollama_model,
+        preferred_cloud_provider=current_settings.preferred_cloud_provider,
+        has_google_key=bool(llm_client.google_key or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")),
+        has_anthropic_key=bool(llm_client.anthropic_key or os.getenv("ANTHROPIC_API_KEY")),
+        has_openai_key=bool(llm_client.openai_key or os.getenv("OPENAI_API_KEY")),
     )
     active_sandbox = (
         SandboxRuntime(base_workspace=state.project_path)
@@ -423,33 +443,59 @@ async def get_settings():
     return {
         "simulation_mode": current_settings.simulation_mode,
         "default_cost_constrained": current_settings.default_cost_constrained,
-        "has_anthropic_key": bool(llm_client.anthropic_key),
-        "has_openai_key": bool(llm_client.openai_key),
-        "has_google_key": bool(llm_client.google_key),
+        "has_anthropic_key": bool(llm_client.anthropic_key or current_settings.anthropic_api_key),
+        "anthropic_key_preview": mask_key(llm_client.anthropic_key or current_settings.anthropic_api_key),
+        "has_openai_key": bool(llm_client.openai_key or current_settings.openai_api_key),
+        "openai_key_preview": mask_key(llm_client.openai_key or current_settings.openai_api_key),
+        "has_google_key": bool(llm_client.google_key or current_settings.google_api_key),
+        "google_key_preview": mask_key(llm_client.google_key or current_settings.google_api_key),
+        "has_openrouter_key": bool(llm_client.openrouter_key or current_settings.openrouter_api_key),
+        "openrouter_key_preview": mask_key(llm_client.openrouter_key or current_settings.openrouter_api_key),
         "auto_push_github": current_settings.auto_push_github,
         "has_github_token": bool(current_settings.github_token),
+        "github_token_preview": mask_key(current_settings.github_token, 4, 4),
         "use_local_provider": current_settings.use_local_provider,
         "local_provider_type": current_settings.local_provider_type,
         "ollama_model": current_settings.ollama_model,
         "ollama_base_url": current_settings.ollama_base_url,
         "gemini_cli_command": current_settings.gemini_cli_command,
+        "preferred_cloud_provider": current_settings.preferred_cloud_provider,
     }
 
 
 @app.post("/api/settings")
 async def update_settings(cfg: ConfigSettings):
     global current_settings
-    current_settings = cfg
-    if cfg.anthropic_api_key:
-        llm_client.anthropic_key = cfg.anthropic_api_key
-    if cfg.openai_api_key:
-        llm_client.openai_key = cfg.openai_api_key
-    if cfg.google_api_key:
-        llm_client.google_key = cfg.google_api_key
-    if cfg.openrouter_api_key:
-        llm_client.openrouter_key = cfg.openrouter_api_key
+    # Update provided keys and preserve existing non-empty ones
+    if cfg.anthropic_api_key and cfg.anthropic_api_key.strip():
+        current_settings.anthropic_api_key = cfg.anthropic_api_key.strip()
+        llm_client.anthropic_key = current_settings.anthropic_api_key
+    if cfg.openai_api_key and cfg.openai_api_key.strip():
+        current_settings.openai_api_key = cfg.openai_api_key.strip()
+        llm_client.openai_key = current_settings.openai_api_key
+    if cfg.google_api_key and cfg.google_api_key.strip():
+        current_settings.google_api_key = cfg.google_api_key.strip()
+        llm_client.google_key = current_settings.google_api_key
+    if cfg.openrouter_api_key and cfg.openrouter_api_key.strip():
+        current_settings.openrouter_api_key = cfg.openrouter_api_key.strip()
+        llm_client.openrouter_key = current_settings.openrouter_api_key
+    if cfg.github_token and cfg.github_token.strip():
+        current_settings.github_token = cfg.github_token.strip()
+
+    current_settings.simulation_mode = cfg.simulation_mode
+    current_settings.default_cost_constrained = cfg.default_cost_constrained
+    current_settings.auto_push_github = cfg.auto_push_github
+    current_settings.use_local_provider = cfg.use_local_provider
+    current_settings.local_provider_type = cfg.local_provider_type
+    current_settings.ollama_model = cfg.ollama_model
+    current_settings.ollama_base_url = cfg.ollama_base_url
+    current_settings.gemini_cli_command = cfg.gemini_cli_command
+    current_settings.preferred_cloud_provider = cfg.preferred_cloud_provider
+
     if cfg.ollama_base_url:
         llm_client.ollama_base_url = cfg.ollama_base_url
+
+    save_settings(current_settings)
     return {"status": "updated"}
 
 

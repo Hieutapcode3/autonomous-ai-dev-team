@@ -40,7 +40,7 @@ class LLMClient:
     def __init__(self, ollama_base_url: str = "http://localhost:11434"):
         self.anthropic_key = os.getenv("ANTHROPIC_API_KEY")
         self.openai_key = os.getenv("OPENAI_API_KEY")
-        self.google_key = os.getenv("GOOGLE_API_KEY")
+        self.google_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
         self.openrouter_key = os.getenv("OPENROUTER_API_KEY")
         self.ollama_base_url = ollama_base_url
 
@@ -85,29 +85,42 @@ class LLMClient:
                 res["output"] = f"[Claude CLI Error: {str(e)} - Fell back to simulated output]\n\n" + res["output"]
                 return res
 
-        # 3. Local Google Gemini CLI execution
+        # 3. Google Gemini CLI or Direct Gemini API execution
         if model == ModelProvider.GEMINI_CLI:
+            google_tok = self.google_key or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+            if google_tok:
+                try:
+                    return await self._call_gemini_api(task, context, log_callback, model_name="gemini-2.0-flash")
+                except Exception as api_err:
+                    if log_callback:
+                        await log_callback("GEMINI", f"Direct Gemini API error ({str(api_err)[:100]}). Falling back to CLI...", "WARN")
             try:
                 return await self._call_gemini_cli(task, context, log_callback)
             except Exception as e:
                 clean_err = str(e).replace("\n", " ").strip()
+                if google_tok:
+                    try:
+                        return await self._call_gemini_api(task, context, log_callback, model_name="gemini-1.5-flash")
+                    except Exception:
+                        pass
                 try:
                     if log_callback:
-                        await log_callback("GEMINI", f"Gemini CLI error ({clean_err}). Redirecting to Local Ollama...", "WARN")
+                        await log_callback("GEMINI", f"Gemini error ({clean_err}). Redirecting to Local Ollama...", "WARN")
                     return await self._call_ollama(task, "qwen2.5-coder:7b", context, log_callback)
                 except Exception:
                     pass
                 if log_callback:
-                    await log_callback("GEMINI", f"Gemini CLI error: {clean_err} - falling back to simulation", "WARN")
+                    await log_callback("GEMINI", f"Gemini error: {clean_err} - falling back to simulation", "WARN")
                 res = await self._simulate_execution(task, model, context, simulate_error)
-                res["output"] = f"[Gemini CLI Error: {clean_err} - Fell back to simulated output]\n\n" + res["output"]
+                res["output"] = f"[Gemini Error: {clean_err} - Fell back to simulated output]\n\n" + res["output"]
                 return res
 
         has_real_key = bool(
             (model in [ModelProvider.CLAUDE_SONNET, ModelProvider.CLAUDE_OPUS] and self.anthropic_key)
             or (model in [ModelProvider.GPT_4O, ModelProvider.GPT_4O_MINI] and self.openai_key)
-            or (model == ModelProvider.GEMINI_PRO and self.google_key)
+            or (model == ModelProvider.GEMINI_PRO and (self.google_key or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")))
             or (self.openrouter_key)
+            or (self.google_key or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY"))
         )
 
         # Fall back to simulation if no API keys are provided or simulation is enforced
@@ -115,15 +128,18 @@ class LLMClient:
             return await self._simulate_execution(task, model, context, simulate_error)
 
         try:
-            return await self._call_real_provider(task, model, context)
+            return await self._call_real_provider(task, model, context, log_callback)
         except Exception as e:
-            # Fallback gracefully with error explanation
             res = await self._simulate_execution(task, model, context, simulate_error)
             res["output"] = f"[Live API Call Error: {str(e)} - Fell back to simulated output]\n\n" + res["output"]
             return res
 
     async def _call_real_provider(
-        self, task: SubTask, model: ModelProvider, context: Dict[str, Any]
+        self,
+        task: SubTask,
+        model: ModelProvider,
+        context: Dict[str, Any],
+        log_callback: Optional[Callable[[str, str, str], Awaitable[None]]] = None,
     ) -> Dict[str, Any]:
         rules_list = context.get("rules", [])
         rules_text = "\n".join([f"- {r.get('title')}: {r.get('content')}" for r in rules_list]) if rules_list else "Standard clean code."
@@ -278,8 +294,149 @@ class LLMClient:
                     "output_tokens": usage.get("completion_tokens", 500),
                 }
 
+        # 4. Google Gemini API
+        gemini_token = self.google_key or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+        if (model == ModelProvider.GEMINI_PRO or (gemini_token and not self.anthropic_key and not self.openai_key and not self.openrouter_key)) and gemini_token:
+            return await self._call_gemini_api(task, context, log_callback, model_name="gemini-1.5-pro")
+
         # Fallback simulation
         return await self._simulate_execution(task, model, context, simulate_error=False)
+
+    async def _call_gemini_api(
+        self,
+        task: SubTask,
+        context: Dict[str, Any],
+        log_callback: Optional[Callable[[str, str, str], Awaitable[None]]] = None,
+        model_name: str = "gemini-1.5-pro",
+    ) -> Dict[str, Any]:
+        """Execute task using official Google Gemini REST API with JSON response format."""
+        api_token = self.google_key or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+        if not api_token:
+            raise RuntimeError("Google Gemini API Key is required but not configured.")
+
+        rules_list = context.get("rules", [])
+        rules_text = "\n".join([f"- {r.get('title')}: {r.get('content')}" for r in rules_list]) if rules_list else "Standard clean code."
+        skills_list = context.get("skills", [])
+        skills_text = "\n".join([f"- {s.get('name')}: {s.get('description')}" for s in skills_list]) if skills_list else "None."
+
+        media_list = context.get("reference_media", [])
+        media_text = (
+            "\n".join([f"- {m.get('name')} ({m.get('media_type')}): {m.get('file_path')}" for m in media_list])
+            if media_list
+            else "None."
+        )
+
+        demo_html = context.get("demo_html")
+        demo_text = "None."
+        if demo_html:
+            extracted = demo_html.get("extracted_logic") or {}
+            funcs_str = ", ".join(extracted.get("functions", []))
+            vars_str = ", ".join(extracted.get("variables", []))
+            code_snippet = extracted.get("code_snippet", "")
+            demo_text = (
+                f"- Playable Demo: {demo_html.get('name')} ({demo_html.get('file_path')})\n"
+                f"  Extracted Functions: {funcs_str}\n"
+                f"  Variables/Constants: {vars_str}\n"
+                f"  Code/Logic Excerpt:\n```javascript\n{code_snippet[:2000]}\n```"
+            )
+
+        system_instruction = (
+            "You are an autonomous senior software engineer and game developer agent in a multi-agent team.\n"
+            "CRITICAL MANDATORY INSTRUCTION: You MUST generate actual, concrete code changes.\n"
+            "You must return your output strictly in JSON format with keys:\n"
+            "- 'files': list of relative file paths created or modified (e.g. ['Assets/BlockHome/Scripts/CoreScript/GamePlay/_Human/HumanActor.cs'])\n"
+            "- 'code_changes': dict mapping file_path to complete code content containing the implementation\n"
+            "- 'explanation': markdown text explanation of decisions made and code changes\n"
+            "- 'commands': list of shell commands to execute (optional)\n\n"
+            f"MANDATORY PROJECT RULES:\n{rules_text}\n\n"
+            f"AVAILABLE WORKFLOW SKILLS:\n{skills_text}\n\n"
+            f"VISUAL & ART REFERENCES:\n{media_text}\n\n"
+            f"PLAYABLE DEMO LOGIC:\n{demo_text}\n"
+        )
+
+        target_files_hint = ", ".join(task.target_files) if task.target_files else "determine based on objective"
+        user_content = (
+            f"Subtask: {task.title}\n"
+            f"Description: {task.description}\n"
+            f"Domain: {task.domain.value}\n"
+            f"Target Files: {target_files_hint}\n"
+            f"Complexity Level: {task.complexity}/10\n"
+            f"Project Context: {json.dumps(context)}"
+        )
+
+        models_to_try = [model_name, "gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"]
+        models_to_try = list(dict.fromkeys(models_to_try))
+
+        last_error = None
+        for candidate_model in models_to_try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{candidate_model}:generateContent?key={api_token}"
+            payload = {
+                "system_instruction": {
+                    "parts": [{"text": system_instruction}]
+                },
+                "contents": [
+                    {
+                        "role": "user",
+                        "parts": [{"text": user_content}]
+                    }
+                ],
+                "generationConfig": {
+                    "responseMimeType": "application/json",
+                    "temperature": 0.2,
+                }
+            }
+
+            if log_callback:
+                await log_callback("GEMINI", f"Calling Google Gemini API model [{candidate_model}]...", "INFO")
+
+            try:
+                async with httpx.AsyncClient(timeout=120.0) as client:
+                    resp = await client.post(url, json=payload)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        candidates = data.get("candidates", [])
+                        if not candidates:
+                            raise RuntimeError("Gemini API returned no candidates.")
+
+                        candidate = candidates[0]
+                        parts = candidate.get("content", {}).get("parts", [])
+                        raw_text = "".join([p.get("text", "") for p in parts])
+                        parsed = _parse_model_json_output(raw_text)
+
+                        usage = data.get("usageMetadata", {})
+                        in_toks = usage.get("promptTokenCount", 1200)
+                        out_toks = usage.get("candidatesTokenCount", 600)
+
+                        if log_callback:
+                            await log_callback(
+                                "GEMINI",
+                                f"Gemini [{candidate_model}] generated response ({in_toks} in / {out_toks} out tokens).",
+                                "SUCCESS",
+                            )
+
+                        return {
+                            "output": parsed.get("explanation", raw_text[:300] + "..."),
+                            "files": parsed.get("files", []),
+                            "code_changes": parsed.get("code_changes", {}),
+                            "commands": parsed.get("commands", []),
+                            "input_tokens": in_toks,
+                            "output_tokens": out_toks,
+                        }
+                    else:
+                        err_body = resp.text
+                        last_error = f"HTTP {resp.status_code}: {err_body[:200]}"
+                        if log_callback:
+                            await log_callback(
+                                "GEMINI",
+                                f"Gemini [{candidate_model}] returned HTTP {resp.status_code}. Trying next candidate...",
+                                "WARN",
+                            )
+            except Exception as ex:
+                last_error = str(ex)
+                if log_callback:
+                    await log_callback("GEMINI", f"Error with [{candidate_model}]: {str(ex)[:150]}", "WARN")
+
+        raise RuntimeError(f"All Google Gemini models failed. Last error: {last_error}")
 
     async def _call_ollama(
         self,
