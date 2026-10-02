@@ -187,12 +187,14 @@ class ProjectContextLoader:
                             name = meta.get("name", skill_dir.name)
                             if name in seen_names:
                                 continue
+                            if name in ["ponytail-debt", "ponytail-audit", "ponytail-gain", "ponytail-help"]:
+                                continue
                             seen_names.add(name)
 
                             skills.append({
                                 "name": name,
                                 "description": meta.get("description", "No description provided."),
-                                "instructions": body[:1500],
+                                "instructions": body[:600],
                                 "path": str(skill_file),
                             })
                         except Exception:
