@@ -293,19 +293,30 @@ class LLMClient:
             await log_callback("Ollama", f"Running model: [{model_name}] for subtask #{task.task_id}...", "INFO")
 
         system_prompt = (
-            "You are an autonomous senior software engineer agent in a multi-agent team. "
+            "You are an autonomous senior software engineer and game developer agent in a multi-agent team.\n"
+            "CRITICAL MANDATORY INSTRUCTION: You MUST generate actual, concrete code changes.\n"
             "You must return your output strictly in JSON format with keys:\n"
-            "- 'files': list of file paths created or modified (e.g. ['src/service.py'])\n"
-            "- 'code_changes': dict mapping file_path to complete code content\n"
-            "- 'explanation': markdown text explanation of decisions made\n"
-            "- 'commands': list of shell commands to execute"
+            "- 'files': list of relative file paths created or modified (e.g. ['Assets/BlockHome/Scripts/CoreScript/GamePlay/_Human/HumanActor.cs'])\n"
+            "- 'code_changes': dict mapping file_path to complete code content containing the implementation\n"
+            "- 'explanation': markdown text explanation of decisions made and code changes\n"
+            "- 'commands': list of shell commands to execute (optional)\n"
+            "Do NOT return empty 'code_changes' or empty 'files' for implementation tasks!"
         )
+
+        project_type = context.get("project_type", "generic")
+        target_files_hint = ", ".join(task.target_files) if task.target_files else "determine based on objective"
+        rules_str = "\n".join([f"- {r.get('title')}: {r.get('content')}" for r in context.get("rules", [])[:4]])
+
         user_prompt = (
-            f"Subtask: {task.title}\n"
+            f"Overall Objective: {context.get('objective', '')}\n"
+            f"Project Directory: {context.get('project_path', 'Sandbox')}\n"
+            f"Project Type: {project_type.upper()}\n"
+            f"Subtask #{task.task_id}: {task.title}\n"
             f"Description: {task.description}\n"
             f"Domain: {task.domain.value}\n"
-            f"Complexity Level: {task.complexity}/10\n"
-            f"Context: {json.dumps(context)}"
+            f"Target Files: {target_files_hint}\n\n"
+            f"Project Guidelines:\n{rules_str}\n\n"
+            "Please output JSON with 'files' and 'code_changes' containing the concrete code."
         )
 
         payload = {
@@ -360,8 +371,12 @@ class LLMClient:
         code_changes = parsed.get("code_changes", {})
 
         # Fallback if model put code in explanation without separating files
-        if not code_changes and "class " in accumulated_text or "def " in accumulated_text:
-            default_file = f"src/{task.domain.value}_module.py"
+        has_code_keywords = any(kw in accumulated_text for kw in ["class ", "def ", "using UnityEngine", "MonoBehaviour", "namespace "])
+        if not code_changes and has_code_keywords:
+            if project_type == "unity":
+                default_file = task.target_files[0] if task.target_files else "Assets/Scripts/Gameplay/GameController.cs"
+            else:
+                default_file = task.target_files[0] if task.target_files else f"src/{task.domain.value}_module.py"
             files.append(default_file)
             code_changes[default_file] = accumulated_text
 
