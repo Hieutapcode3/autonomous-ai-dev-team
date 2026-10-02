@@ -73,6 +73,12 @@ class LLMClient:
             try:
                 return await self._call_claude_cli(task, context, log_callback)
             except Exception as e:
+                try:
+                    if log_callback:
+                        await log_callback("CLI", f"Claude CLI error ({str(e)}). Redirecting to Local Ollama...", "WARN")
+                    return await self._call_ollama(task, "qwen2.5-coder:7b", context, log_callback)
+                except Exception:
+                    pass
                 if log_callback:
                     await log_callback("CLI", f"Claude CLI error: {str(e)} - falling back to simulation", "WARN")
                 res = await self._simulate_execution(task, model, context, simulate_error)
@@ -84,6 +90,12 @@ class LLMClient:
             try:
                 return await self._call_gemini_cli(task, context, log_callback)
             except Exception as e:
+                try:
+                    if log_callback:
+                        await log_callback("GEMINI", f"Gemini CLI error ({str(e)}). Redirecting to Local Ollama...", "WARN")
+                    return await self._call_ollama(task, "qwen2.5-coder:7b", context, log_callback)
+                except Exception:
+                    pass
                 if log_callback:
                     await log_callback("GEMINI", f"Gemini CLI error: {str(e)} - falling back to simulation", "WARN")
                 res = await self._simulate_execution(task, model, context, simulate_error)

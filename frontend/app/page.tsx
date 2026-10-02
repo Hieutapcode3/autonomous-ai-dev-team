@@ -22,6 +22,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   CheckCircle2,
+  History,
 } from "lucide-react";
 
 import { DAGCanvas } from "@/components/DAGCanvas";
@@ -33,6 +34,7 @@ import { TaskModal } from "@/components/TaskModal";
 import { SettingsModal } from "@/components/SettingsModal";
 import { RunConfirmModal } from "@/components/RunConfirmModal";
 import { ExecutionSummaryModal } from "@/components/ExecutionSummaryModal";
+import { SessionHistoryModal } from "@/components/SessionHistoryModal";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
 const WS_BASE = process.env.NEXT_PUBLIC_WS_URL || "ws://127.0.0.1:8000";
@@ -46,6 +48,7 @@ export default function ControlCenterPage() {
   const [isTaskModalOpen, setIsTaskModalOpen] = useState<boolean>(false);
   const [isConfirmModalOpen, setIsConfirmModalOpen] = useState<boolean>(false);
   const [isSummaryModalOpen, setIsSummaryModalOpen] = useState<boolean>(false);
+  const [isHistoryModalOpen, setIsHistoryModalOpen] = useState<boolean>(false);
   const [artifactsHistory, setArtifactsHistory] = useState<any[]>([]);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState<boolean>(false);
   const [isConnected, setIsConnected] = useState<boolean>(false);
@@ -495,6 +498,14 @@ export default function ControlCenterPage() {
           </button>
 
           <button
+            onClick={() => setIsHistoryModalOpen(true)}
+            className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700/80 text-xs font-semibold text-slate-200 flex items-center gap-1.5 transition-all shadow-sm"
+          >
+            <History className="w-3.5 h-3.5 text-cyan-400" />
+            Run History
+          </button>
+
+          <button
             onClick={() => setIsTaskModalOpen(true)}
             className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700/80 text-xs font-semibold text-slate-200 flex items-center gap-1.5 transition-all shadow-sm"
           >
@@ -873,6 +884,37 @@ export default function ControlCenterPage() {
           setIsSummaryModalOpen(false);
           setActiveBottomTab("artifacts");
         }}
+      />
+
+      {/* Session History Modal */}
+      <SessionHistoryModal
+        isOpen={isHistoryModalOpen}
+        onClose={() => setIsHistoryModalOpen(false)}
+        currentSessionId={sessionId}
+        onSelectSession={async (sid) => {
+          setSessionId(sid);
+          try {
+            const res = await fetch(`${API_BASE}/api/sessions/${sid}`);
+            if (res.ok) {
+              const data = await res.json();
+              setSessionState(data);
+              if (data.artifacts_history) {
+                setArtifactsHistory(data.artifacts_history);
+              }
+              appendLog("System", `Loaded historical session #${sid}: "${data.objective}"`, "SUCCESS");
+            }
+          } catch {
+            // Ignore fetch error
+          }
+        }}
+        onViewSummaryForSession={(fullData) => {
+          setSessionState(fullData);
+          if (fullData.artifacts_history) {
+            setArtifactsHistory(fullData.artifacts_history);
+          }
+          setIsSummaryModalOpen(true);
+        }}
+        apiUrl={API_BASE}
       />
     </div>
   );
