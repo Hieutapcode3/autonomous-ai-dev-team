@@ -14,12 +14,14 @@ import {
   Settings,
   HelpCircle,
   FileCode,
+  KeyRound,
+  Lock,
 } from "lucide-react";
 
 interface RunConfirmModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onConfirm: (simulateFailure: boolean, useSimulation: boolean) => void;
+  onConfirm: (simulateFailure: boolean, useSimulation: boolean, taskKey?: string) => void;
   sessionState: any;
   currentSimulationMode: boolean;
   onToggleSimulationMode: (val: boolean) => void;
@@ -36,6 +38,8 @@ export function RunConfirmModal({
   apiUrl,
 }: RunConfirmModalProps) {
   const [simulateFailure, setSimulateFailure] = useState(false);
+  const [enableTaskKey, setEnableTaskKey] = useState(false);
+  const [taskKey, setTaskKey] = useState("");
   const [providerInfo, setProviderInfo] = useState<{
     ollamaOnline: boolean;
     ollamaModel: string;
@@ -83,7 +87,8 @@ export function RunConfirmModal({
   const projectPath = sessionState?.project_path || "Default Sandbox Directory";
 
   const handleStart = () => {
-    onConfirm(simulateFailure, currentSimulationMode);
+    const keyToPass = enableTaskKey && taskKey.trim() ? taskKey.trim() : undefined;
+    onConfirm(simulateFailure, currentSimulationMode, keyToPass);
     onClose();
   };
 
@@ -255,6 +260,45 @@ export function RunConfirmModal({
                 </span>
               </div>
             </label>
+          </div>
+
+          {/* TASK KEY PROTECTION OPTION */}
+          <div className="pt-2 border-t border-slate-800/80 space-y-2">
+            <label className="flex items-center gap-3 p-2.5 rounded-xl bg-slate-950/60 border border-slate-800 cursor-pointer hover:bg-slate-950 transition-colors">
+              <input
+                type="checkbox"
+                checked={enableTaskKey}
+                onChange={(e) => setEnableTaskKey(e.target.checked)}
+                className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-indigo-500 focus:ring-indigo-500 focus:ring-offset-0"
+              />
+              <div className="flex flex-col">
+                <span className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+                  <KeyRound className="w-3.5 h-3.5 text-indigo-400" />
+                  Đặt Task Key bảo vệ phiên chạy (Protect with Task Key)
+                </span>
+                <span className="text-[10px] text-slate-400">
+                  Khi bật, nếu muốn bấm Stop dừng giữa chừng thì phải nhập đúng mã Task Key này mới được dừng.
+                </span>
+              </div>
+            </label>
+
+            {enableTaskKey && (
+              <div className="p-3 rounded-xl bg-slate-950 border border-indigo-500/30 space-y-1.5 animate-in fade-in duration-150">
+                <label className="text-[11px] font-mono text-indigo-300 font-semibold block">
+                  Mã Task Key (PIN / Password):
+                </label>
+                <input
+                  type="text"
+                  value={taskKey}
+                  onChange={(e) => setTaskKey(e.target.value)}
+                  placeholder="Ví dụ: 1234 hoặc secret-key..."
+                  className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs font-mono text-slate-100 placeholder:text-slate-600 focus:outline-none focus:border-indigo-500/60"
+                />
+                <p className="text-[10px] text-slate-500">
+                  Hãy ghi nhớ mã này để xác nhận nếu cần dừng workflow khi đang thực thi.
+                </p>
+              </div>
+            )}
           </div>
         </div>
 

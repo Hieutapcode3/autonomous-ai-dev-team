@@ -79,6 +79,8 @@ class GlobalDAGState(BaseModel):
     demo_html: Optional[Dict[str, Any]] = None
     use_simulation: bool = True
     artifacts_history: List[Dict[str, Any]] = Field(default_factory=list)
+    task_key: Optional[str] = None
+    has_task_key: bool = False
 
 
 class VerifierResult(BaseModel):
@@ -117,6 +119,11 @@ class CreateSessionRequest(BaseModel):
     selected_provider_override: Optional[ModelProvider] = None
     reference_media: List[Dict[str, Any]] = Field(default_factory=list)
     demo_html: Optional[Dict[str, Any]] = None
+    task_key: Optional[str] = None
+
+
+class StopSessionRequest(BaseModel):
+    task_key: Optional[str] = None
 
 
 class ConfigSettings(BaseModel):
