@@ -56,10 +56,19 @@ export function SubTaskNode({ data }: { data: SubTaskNodeData }) {
           : "bg-slate-900/80"
       } ${getStatusBorder()}`}
     >
+      {/* Primary Horizontal Target Handle (Left) */}
+      <Handle
+        type="target"
+        position={Position.Left}
+        id="target-left"
+        className="w-3.5 h-3.5 !bg-cyan-400 !border-2 !border-slate-900 shadow-md shadow-cyan-400/50 -left-2"
+      />
+      {/* Secondary Top Handle for vertical fallback */}
       <Handle
         type="target"
         position={Position.Top}
-        className="w-3 h-3 !bg-cyan-400 !border-2 !border-slate-900"
+        id="target-top"
+        className="w-2.5 h-2.5 !bg-cyan-600 !border !border-slate-900 opacity-0 pointer-events-none"
       />
 
       {data.retryOf && (
@@ -153,10 +162,19 @@ export function SubTaskNode({ data }: { data: SubTaskNodeData }) {
         )}
       </div>
 
+      {/* Primary Horizontal Source Handle (Right) */}
+      <Handle
+        type="source"
+        position={Position.Right}
+        id="source-right"
+        className="w-3.5 h-3.5 !bg-cyan-400 !border-2 !border-slate-900 shadow-md shadow-cyan-400/50 -right-2"
+      />
+      {/* Secondary Bottom Handle for vertical fallback */}
       <Handle
         type="source"
         position={Position.Bottom}
-        className="w-3 h-3 !bg-cyan-400 !border-2 !border-slate-900"
+        id="source-bottom"
+        className="w-2.5 h-2.5 !bg-cyan-600 !border !border-slate-900 opacity-0 pointer-events-none"
       />
     </div>
   );

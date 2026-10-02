@@ -14,6 +14,13 @@ import {
   Layers,
   Bug,
   Info,
+  GripHorizontal,
+  ChevronDown,
+  ChevronUp,
+  Maximize2,
+  Minimize2,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from "lucide-react";
 
 import { DAGCanvas } from "@/components/DAGCanvas";
@@ -36,6 +43,44 @@ export default function ControlCenterPage() {
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState<boolean>(false);
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [githubResult, setGithubResult] = useState<{ repo_url: string; commit_sha: string; repo_name: string } | null>(null);
+
+  // Resizable panels state
+  const [bottomPanelHeight, setBottomPanelHeight] = useState<number>(270);
+  const [isDraggingSplitter, setIsDraggingSplitter] = useState<boolean>(false);
+  const [isBottomCollapsed, setIsBottomCollapsed] = useState<boolean>(false);
+  const [isLeftCollapsed, setIsLeftCollapsed] = useState<boolean>(false);
+
+  // Dragging logic for horizontal splitter between DAG canvas and bottom tabs
+  useEffect(() => {
+    if (!isDraggingSplitter) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const newHeight = window.innerHeight - e.clientY - 12;
+      const clamped = Math.max(110, Math.min(newHeight, window.innerHeight - 240));
+      setBottomPanelHeight(clamped);
+      if (isBottomCollapsed) {
+        setIsBottomCollapsed(false);
+      }
+    };
+
+    const handleMouseUp = () => {
+      setIsDraggingSplitter(false);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+
+    document.body.style.cursor = "row-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+  }, [isDraggingSplitter, isBottomCollapsed]);
 
   const [fleetState, setFleetState] = useState({
     planner: "IDLE",
@@ -474,9 +519,24 @@ export default function ControlCenterPage() {
       )}
 
       {/* WORKSPACE MAIN BODY */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden relative">
+        {/* Floating Sidebar Toggle Button */}
+        <button
+          onClick={() => setIsLeftCollapsed(!isLeftCollapsed)}
+          className={`absolute top-3 z-30 p-1.5 rounded-r-xl bg-slate-900/90 border border-l-0 border-slate-700 hover:border-cyan-400 text-slate-300 hover:text-cyan-300 flex items-center justify-center shadow-2xl transition-all duration-300 ${
+            isLeftCollapsed ? "left-0" : "left-80"
+          }`}
+          title={isLeftCollapsed ? "Expand side panel" : "Collapse side panel"}
+        >
+          {isLeftCollapsed ? <PanelLeftOpen className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
+        </button>
+
         {/* LEFT CONTROL PANEL (Section 5.1 & 5.2) */}
-        <aside className="w-80 border-r border-slate-800/80 bg-slate-950/60 flex flex-col p-3.5 gap-3.5 overflow-y-auto shrink-0 backdrop-blur-sm">
+        <aside
+          className={`border-r border-slate-800/80 bg-slate-950/60 flex flex-col gap-3.5 overflow-y-auto shrink-0 backdrop-blur-sm transition-all duration-300 ${
+            isLeftCollapsed ? "w-0 p-0 border-r-0 opacity-0 overflow-hidden pointer-events-none" : "w-80 p-3.5 opacity-100"
+          }`}
+        >
           <SessionStats
             objective={sessionState?.objective || ""}
             iteration={sessionState?.iteration || 0}
@@ -541,9 +601,9 @@ export default function ControlCenterPage() {
         </aside>
 
         {/* RIGHT WORKSPACE (DAG Canvas + Bottom Panels) */}
-        <main className="flex-1 flex flex-col overflow-hidden p-3 gap-3">
+        <main className="flex-1 flex flex-col overflow-hidden p-3 gap-2">
           {/* SECTION 3: LIVE DAG WORKFLOW CANVAS */}
-          <div className="flex-1 min-h-[300px]">
+          <div className="flex-1 min-h-[160px] overflow-hidden">
             <DAGCanvas
               tasks={sessionState?.tasks || {}}
               executionOrder={sessionState?.execution_order || []}
@@ -551,12 +611,75 @@ export default function ControlCenterPage() {
             />
           </div>
 
-          {/* SECTION 4: REAL-TIME LOG STREAM, DIFF & VERIFIER TABS */}
-          <div className="h-64 flex flex-col shrink-0">
-            {/* Tab Header */}
-            <div className="flex items-center gap-2 mb-2">
+          {/* DRAGGABLE HORIZONTAL SPLITTER BAR */}
+          <div
+            onMouseDown={() => setIsDraggingSplitter(true)}
+            className="group relative h-4 -my-0.5 flex items-center justify-center cursor-row-resize select-none z-20"
+            title="Drag up or down to resize bottom panel / DAG canvas. Double-click to toggle collapse."
+            onDoubleClick={() => setIsBottomCollapsed((prev) => !prev)}
+          >
+            <div
+              className={`w-full h-[2px] transition-all ${
+                isDraggingSplitter
+                  ? "bg-cyan-400 shadow-md shadow-cyan-400/80"
+                  : "bg-slate-800 group-hover:bg-cyan-500/70"
+              }`}
+            />
+
+            <div
+              className={`absolute px-3 py-0.5 rounded-full border text-[10px] font-mono flex items-center gap-1.5 transition-all backdrop-blur-md ${
+                isDraggingSplitter
+                  ? "bg-cyan-950 border-cyan-400 text-cyan-200 shadow-xl shadow-cyan-950/80 ring-2 ring-cyan-400/30"
+                  : "bg-slate-900 border-slate-700 text-slate-400 group-hover:border-cyan-500 group-hover:text-cyan-300 shadow-lg"
+              }`}
+            >
+              <GripHorizontal className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline text-[9px] uppercase font-bold tracking-wider">
+                {isBottomCollapsed ? "Collapsed (42px)" : `${Math.round(bottomPanelHeight)}px`}
+              </span>
+            </div>
+
+            <div className="absolute right-2 flex items-center gap-1.5 opacity-80 group-hover:opacity-100 transition-opacity">
               <button
-                onClick={() => setActiveBottomTab("logs")}
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsBottomCollapsed((prev) => !prev);
+                }}
+                className="px-1.5 py-0.5 rounded bg-slate-900/90 border border-slate-700 hover:border-cyan-400 hover:text-cyan-300 text-slate-400 text-[10px] flex items-center gap-1 transition-colors"
+                title={isBottomCollapsed ? "Expand bottom panel" : "Collapse bottom panel"}
+              >
+                {isBottomCollapsed ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                <span className="text-[9px]">{isBottomCollapsed ? "Expand" : "Collapse"}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsBottomCollapsed(false);
+                  setBottomPanelHeight((prev) => (prev > 420 ? 270 : 540));
+                }}
+                className="p-1 rounded bg-slate-900/90 border border-slate-700 hover:border-cyan-400 hover:text-cyan-300 text-slate-400 transition-colors"
+                title="Toggle Maximize/Default height"
+              >
+                {bottomPanelHeight > 420 ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
+              </button>
+            </div>
+          </div>
+
+          {/* SECTION 4: REAL-TIME LOG STREAM, DIFF & VERIFIER TABS */}
+          <div
+            style={{ height: isBottomCollapsed ? "42px" : `${bottomPanelHeight}px` }}
+            className="flex flex-col shrink-0 overflow-hidden transition-[height] duration-100"
+          >
+            {/* Tab Header */}
+            <div className="flex items-center gap-2 mb-2 shrink-0">
+              <button
+                onClick={() => {
+                  setActiveBottomTab("logs");
+                  if (isBottomCollapsed) setIsBottomCollapsed(false);
+                }}
                 className={`px-3 py-1 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all ${
                   activeBottomTab === "logs"
                     ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/40"
@@ -568,7 +691,10 @@ export default function ControlCenterPage() {
               </button>
 
               <button
-                onClick={() => setActiveBottomTab("artifacts")}
+                onClick={() => {
+                  setActiveBottomTab("artifacts");
+                  if (isBottomCollapsed) setIsBottomCollapsed(false);
+                }}
                 className={`px-3 py-1 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all ${
                   activeBottomTab === "artifacts"
                     ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/40"
@@ -580,7 +706,10 @@ export default function ControlCenterPage() {
               </button>
 
               <button
-                onClick={() => setActiveBottomTab("verifier")}
+                onClick={() => {
+                  setActiveBottomTab("verifier");
+                  if (isBottomCollapsed) setIsBottomCollapsed(false);
+                }}
                 className={`px-3 py-1 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all ${
                   activeBottomTab === "verifier"
                     ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/40"
