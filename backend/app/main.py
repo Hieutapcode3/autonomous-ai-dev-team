@@ -413,6 +413,7 @@ async def get_local_status():
         "gemini_cli": {
             "found": bool(gemini_cli_path),
             "path": gemini_cli_path,
+            "authenticated": bool(llm_client.google_key or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY") or os.path.exists(os.path.expanduser("~/.config/gemini-cli.toml"))),
         },
     }
 

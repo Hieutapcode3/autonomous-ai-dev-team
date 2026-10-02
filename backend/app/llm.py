@@ -90,16 +90,17 @@ class LLMClient:
             try:
                 return await self._call_gemini_cli(task, context, log_callback)
             except Exception as e:
+                clean_err = str(e).replace("\n", " ").strip()
                 try:
                     if log_callback:
-                        await log_callback("GEMINI", f"Gemini CLI error ({str(e)}). Redirecting to Local Ollama...", "WARN")
+                        await log_callback("GEMINI", f"Gemini CLI error ({clean_err}). Redirecting to Local Ollama...", "WARN")
                     return await self._call_ollama(task, "qwen2.5-coder:7b", context, log_callback)
                 except Exception:
                     pass
                 if log_callback:
-                    await log_callback("GEMINI", f"Gemini CLI error: {str(e)} - falling back to simulation", "WARN")
+                    await log_callback("GEMINI", f"Gemini CLI error: {clean_err} - falling back to simulation", "WARN")
                 res = await self._simulate_execution(task, model, context, simulate_error)
-                res["output"] = f"[Gemini CLI Error: {str(e)} - Fell back to simulated output]\n\n" + res["output"]
+                res["output"] = f"[Gemini CLI Error: {clean_err} - Fell back to simulated output]\n\n" + res["output"]
                 return res
 
         has_real_key = bool(
@@ -526,18 +527,30 @@ class LLMClient:
             f"Context: {json.dumps(context)}"
         )
 
+        api_token = self.google_key or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+        token_file = os.path.expanduser("~/.config/gemini-cli.toml")
+        if not api_token and not os.path.exists(token_file):
+            raise RuntimeError(
+                "Gemini CLI requires Google API Token. Configure Google API Key in Settings or set GOOGLE_API_KEY."
+            )
+
         if log_callback:
             await log_callback("GEMINI", f"Spawning: {gemini_bin}...", "INFO")
 
+        cmd_args = [gemini_bin]
+        if api_token:
+            cmd_args.extend(["-t", api_token])
+        cmd_args.append(prompt)
+
         proc = await asyncio.create_subprocess_exec(
-            gemini_bin,
-            prompt,
+            *cmd_args,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
 
         stdout_lines = []
+        stderr_lines = []
 
         async def read_stdout():
             while True:
@@ -555,6 +568,7 @@ class LLMClient:
                 if not line:
                     break
                 decoded = line.decode(errors="replace").rstrip()
+                stderr_lines.append(decoded)
                 if log_callback and decoded:
                     await log_callback("GEMINI", f"[stderr] {decoded}", "WARN")
 
@@ -572,9 +586,11 @@ class LLMClient:
             raise RuntimeError("Gemini CLI process timed out after 60s")
 
         full_stdout = "\n".join(stdout_lines)
+        full_stderr = "\n".join(stderr_lines)
 
         if proc.returncode != 0:
-            raise RuntimeError(f"Gemini CLI exited with code {proc.returncode}: {full_stdout}")
+            error_detail = full_stderr.strip() or full_stdout.strip() or f"Process exited with code {proc.returncode}"
+            raise RuntimeError(f"{error_detail}")
 
         if log_callback:
             await log_callback("GEMINI", "Gemini CLI execution succeeded. Parsing response...", "SUCCESS")
