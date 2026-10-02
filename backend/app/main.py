@@ -2,6 +2,7 @@ import asyncio
 import uuid
 import os
 import shutil
+import re
 import httpx
 from typing import Dict, List, Optional
 from pathlib import Path
@@ -101,6 +102,7 @@ async def create_session(req: CreateSessionRequest):
     state.ingested_skills = context["skills"]
     state.context_summary = context["summary"]
     state.reference_media = req.reference_media
+    state.demo_html = req.demo_html or next((m for m in req.reference_media if m.get("media_type") == "html"), None)
     state.max_iterations = req.max_iterations
     sessions[session_id] = state
     return state
@@ -119,7 +121,39 @@ async def upload_reference_media(file: UploadFile = File(...)):
     save_path.write_bytes(content)
 
     is_video = file_ext in [".mp4", ".webm", ".mov", ".mkv", ".avi"]
-    media_type = "video" if is_video else "image"
+    is_html = file_ext in [".html", ".htm"]
+
+    extracted_logic = None
+    if is_html:
+        media_type = "html"
+        try:
+            text_content = content.decode("utf-8", errors="replace")
+            script_blocks = re.findall(r"<script[\s\S]*?>([\s\S]*?)</script>", text_content, flags=re.IGNORECASE)
+            scripts_combined = "\n".join(script_blocks) if script_blocks else text_content
+
+            functions = re.findall(r"function\s+([a-zA-Z0-9_]+)\s*\(", scripts_combined)
+            arrow_funcs = re.findall(r"(?:const|let|var)\s+([a-zA-Z0-9_]+)\s*=\s*(?:\([^)]*\)|[a-zA-Z0-9_]+)?\s*=>", scripts_combined)
+            all_funcs = list(dict.fromkeys(functions + arrow_funcs))[:30]
+
+            const_vars = re.findall(r"(?:const|let|var)\s+([a-zA-Z0-9_]+)", scripts_combined)
+            all_vars = list(dict.fromkeys(const_vars))[:40]
+
+            has_canvas = bool(re.search(r"<canvas[\s\S]*?>", text_content, flags=re.IGNORECASE))
+            has_request_anim = "requestAnimationFrame" in scripts_combined
+
+            extracted_logic = {
+                "has_canvas": has_canvas,
+                "has_game_loop": has_request_anim or "setInterval" in scripts_combined,
+                "functions": all_funcs,
+                "variables": all_vars,
+                "code_snippet": scripts_combined[:5000],
+            }
+        except Exception as e:
+            extracted_logic = {"error": str(e)}
+    elif is_video:
+        media_type = "video"
+    else:
+        media_type = "image"
 
     return {
         "name": file.filename,
@@ -128,6 +162,7 @@ async def upload_reference_media(file: UploadFile = File(...)):
         "url": f"/uploads/references/{unique_name}",
         "media_type": media_type,
         "size_bytes": len(content),
+        "extracted_logic": extracted_logic,
     }
 
 
