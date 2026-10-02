@@ -25,12 +25,20 @@ class DynamicModelRouter:
         use_local_provider: bool = False,
         local_provider_type: str = "ollama",
         ollama_model: str = "qwen2.5-coder:7b",
+        preferred_cloud_provider: str = "auto",
+        has_google_key: bool = False,
+        has_anthropic_key: bool = False,
+        has_openai_key: bool = False,
     ):
         self.cost_constrained = cost_constrained
         self.force_simulator = force_simulator
         self.use_local_provider = use_local_provider
         self.local_provider_type = local_provider_type
         self.ollama_model = ollama_model
+        self.preferred_cloud_provider = preferred_cloud_provider
+        self.has_google_key = has_google_key
+        self.has_anthropic_key = has_anthropic_key
+        self.has_openai_key = has_openai_key
 
     @staticmethod
     def get_agent_for_task(domain: TaskDomain) -> str:
@@ -54,6 +62,11 @@ class DynamicModelRouter:
             if "deepseek" in self.ollama_model.lower():
                 return ModelProvider.OLLAMA_DEEPSEEK, f"Local AI: Ollama ({self.ollama_model}) - 100% Free & Offline"
             return ModelProvider.OLLAMA_QWEN, f"Local AI: Ollama ({self.ollama_model}) - 100% Free & Offline"
+
+        if self.preferred_cloud_provider == "gemini" or (
+            self.preferred_cloud_provider == "auto" and self.has_google_key and not self.has_anthropic_key and not self.has_openai_key
+        ):
+            return ModelProvider.GEMINI_PRO, f"Cloud AI: Google Gemini (Gemini 1.5/2.0 Pro) - Lv.{task.complexity}/10"
 
         # Tier 1 & 2: Big-context tasks
         if "big_log_analysis" in task.required_tools or "large_repo_search" in task.required_tools:

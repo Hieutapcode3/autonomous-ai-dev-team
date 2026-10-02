@@ -140,3 +140,4 @@ class ConfigSettings(BaseModel):
     ollama_model: str = "qwen2.5-coder:7b"
     ollama_base_url: str = "http://localhost:11434"
     gemini_cli_command: str = "gemini"
+    preferred_cloud_provider: str = "auto"

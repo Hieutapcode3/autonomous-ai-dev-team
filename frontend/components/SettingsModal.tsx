@@ -48,9 +48,19 @@ export function SettingsModal({ isOpen, onClose, apiUrl }: SettingsModalProps) {
   const [googleKey, setGoogleKey] = useState("");
   const [openrouterKey, setOpenrouterKey] = useState("");
   const [githubToken, setGithubToken] = useState("");
+  const [hasAnthropicKey, setHasAnthropicKey] = useState(false);
+  const [hasOpenaiKey, setHasOpenaiKey] = useState(false);
+  const [hasGoogleKey, setHasGoogleKey] = useState(false);
+  const [hasOpenrouterKey, setHasOpenrouterKey] = useState(false);
+  const [hasGithubToken, setHasGithubToken] = useState(false);
+  const [anthropicPreview, setAnthropicPreview] = useState("");
+  const [openaiPreview, setOpenaiPreview] = useState("");
+  const [googlePreview, setGooglePreview] = useState("");
+  const [openrouterPreview, setOpenrouterPreview] = useState("");
+  const [githubTokenPreview, setGithubTokenPreview] = useState("");
+  const [preferredCloudProvider, setPreferredCloudProvider] = useState("auto");
   const [simulationMode, setSimulationMode] = useState(true);
   const [autoPushGithub, setAutoPushGithub] = useState(false);
-  const [hasGithubToken, setHasGithubToken] = useState(false);
   const [saved, setSaved] = useState(false);
 
   // Local AI & CLI runner state
@@ -63,12 +73,33 @@ export function SettingsModal({ isOpen, onClose, apiUrl }: SettingsModalProps) {
 
   useEffect(() => {
     if (isOpen) {
+      try {
+        const storedGoogle = localStorage.getItem("ag_key_google") || "";
+        const storedAnthropic = localStorage.getItem("ag_key_anthropic") || "";
+        const storedOpenai = localStorage.getItem("ag_key_openai") || "";
+        const storedGithub = localStorage.getItem("ag_key_github") || "";
+        if (storedGoogle && !googleKey) setGoogleKey(storedGoogle);
+        if (storedAnthropic && !anthropicKey) setAnthropicKey(storedAnthropic);
+        if (storedOpenai && !openaiKey) setOpenaiKey(storedOpenai);
+        if (storedGithub && !githubToken) setGithubToken(storedGithub);
+      } catch {}
+
       fetch(`${apiUrl}/api/settings`)
         .then((res) => res.json())
         .then((data) => {
           setSimulationMode(data.simulation_mode ?? true);
           setAutoPushGithub(data.auto_push_github ?? false);
           setHasGithubToken(data.has_github_token ?? false);
+          setGithubTokenPreview(data.github_token_preview || "");
+          setHasGoogleKey(data.has_google_key ?? false);
+          setGooglePreview(data.google_key_preview || "");
+          setHasAnthropicKey(data.has_anthropic_key ?? false);
+          setAnthropicPreview(data.anthropic_key_preview || "");
+          setHasOpenaiKey(data.has_openai_key ?? false);
+          setOpenaiPreview(data.openai_key_preview || "");
+          setHasOpenrouterKey(data.has_openrouter_key ?? false);
+          setOpenrouterPreview(data.openrouter_key_preview || "");
+          setPreferredCloudProvider(data.preferred_cloud_provider || "auto");
           setUseLocalProvider(data.use_local_provider ?? false);
           setLocalProviderType(data.local_provider_type ?? "ollama");
           if (data.ollama_model) setOllamaModel(data.ollama_model);
@@ -97,6 +128,11 @@ export function SettingsModal({ isOpen, onClose, apiUrl }: SettingsModalProps) {
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      if (googleKey) localStorage.setItem("ag_key_google", googleKey);
+      if (anthropicKey) localStorage.setItem("ag_key_anthropic", anthropicKey);
+      if (openaiKey) localStorage.setItem("ag_key_openai", openaiKey);
+      if (githubToken) localStorage.setItem("ag_key_github", githubToken);
+
       await fetch(`${apiUrl}/api/settings`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -113,6 +149,7 @@ export function SettingsModal({ isOpen, onClose, apiUrl }: SettingsModalProps) {
           ollama_model: ollamaModel,
           ollama_base_url: ollamaBaseUrl,
           gemini_cli_command: geminiCliCommand,
+          preferred_cloud_provider: preferredCloudProvider,
         }),
       });
       setSaved(true);
@@ -398,44 +435,84 @@ export function SettingsModal({ isOpen, onClose, apiUrl }: SettingsModalProps) {
 
           {/* LLM API Keys */}
           <div className="flex flex-col gap-3 pt-2 border-t border-slate-800">
-            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">LLM Provider Keys</p>
+            <div className="flex items-center justify-between">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">LLM Provider Keys &amp; Priority</p>
+            </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-400 mb-1 flex items-center gap-1.5">
-                <Key className="w-3.5 h-3.5 text-purple-400" /> Anthropic (Claude 3.5 Sonnet / Opus)
+            {/* Preferred Cloud Provider */}
+            <div className="flex flex-col gap-1.5 p-2.5 rounded-xl bg-slate-950/60 border border-slate-800">
+              <label className="text-[11px] font-semibold text-slate-300 flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-cyan-400" /> Cloud AI Priority
               </label>
-              <input
-                type="password"
-                value={anthropicKey}
-                onChange={(e) => setAnthropicKey(e.target.value)}
-                placeholder="sk-ant-..."
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-cyan-500"
-              />
+              <select
+                value={preferredCloudProvider}
+                onChange={(e) => setPreferredCloudProvider(e.target.value)}
+                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-cyan-500"
+              >
+                <option value="auto">Auto-Detect (Uses configured API keys)</option>
+                <option value="gemini">Google Gemini (Gemini 2.0 Flash / 1.5 Pro)</option>
+                <option value="anthropic">Anthropic Claude (Claude 3.5 Sonnet / Opus)</option>
+                <option value="openai">OpenAI (GPT-4o / GPT-4o-mini)</option>
+              </select>
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-400 mb-1 flex items-center gap-1.5">
-                <Key className="w-3.5 h-3.5 text-amber-400" /> OpenAI (GPT-4o / GPT-4o-mini)
-              </label>
-              <input
-                type="password"
-                value={openaiKey}
-                onChange={(e) => setOpenaiKey(e.target.value)}
-                placeholder="sk-..."
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-cyan-500"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-400 mb-1 flex items-center gap-1.5">
-                <Key className="w-3.5 h-3.5 text-teal-400" /> Google Gemini (Gemini 1.5 Pro)
-              </label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-xs font-semibold text-slate-400 flex items-center gap-1.5">
+                  <Key className="w-3.5 h-3.5 text-teal-400" /> Google Gemini (Gemini 2.0 Flash / 1.5 Pro)
+                </label>
+                {(hasGoogleKey || googleKey) && (
+                  <span className="text-[10px] text-emerald-400 font-mono bg-emerald-950/60 border border-emerald-500/40 px-2 py-0.5 rounded-full flex items-center gap-1">
+                    <Check className="w-2.5 h-2.5" /> Saved {googlePreview ? `(${googlePreview})` : ""}
+                  </span>
+                )}
+              </div>
               <input
                 type="password"
                 value={googleKey}
                 onChange={(e) => setGoogleKey(e.target.value)}
-                placeholder="AIzaSy..."
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-cyan-500"
+                placeholder={hasGoogleKey ? `Configured (${googlePreview || "Active"}). Type new key to replace.` : "AIzaSy..."}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-teal-500 placeholder:text-slate-500"
+              />
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-xs font-semibold text-slate-400 flex items-center gap-1.5">
+                  <Key className="w-3.5 h-3.5 text-purple-400" /> Anthropic (Claude 3.5 Sonnet / Opus)
+                </label>
+                {(hasAnthropicKey || anthropicKey) && (
+                  <span className="text-[10px] text-emerald-400 font-mono bg-emerald-950/60 border border-emerald-500/40 px-2 py-0.5 rounded-full flex items-center gap-1">
+                    <Check className="w-2.5 h-2.5" /> Saved {anthropicPreview ? `(${anthropicPreview})` : ""}
+                  </span>
+                )}
+              </div>
+              <input
+                type="password"
+                value={anthropicKey}
+                onChange={(e) => setAnthropicKey(e.target.value)}
+                placeholder={hasAnthropicKey ? `Configured (${anthropicPreview || "Active"}). Type new key to replace.` : "sk-ant-..."}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-purple-500 placeholder:text-slate-500"
+              />
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-xs font-semibold text-slate-400 flex items-center gap-1.5">
+                  <Key className="w-3.5 h-3.5 text-amber-400" /> OpenAI (GPT-4o / GPT-4o-mini)
+                </label>
+                {(hasOpenaiKey || openaiKey) && (
+                  <span className="text-[10px] text-emerald-400 font-mono bg-emerald-950/60 border border-emerald-500/40 px-2 py-0.5 rounded-full flex items-center gap-1">
+                    <Check className="w-2.5 h-2.5" /> Saved {openaiPreview ? `(${openaiPreview})` : ""}
+                  </span>
+                )}
+              </div>
+              <input
+                type="password"
+                value={openaiKey}
+                onChange={(e) => setOpenaiKey(e.target.value)}
+                placeholder={hasOpenaiKey ? `Configured (${openaiPreview || "Active"}). Type new key to replace.` : "sk-..."}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500 placeholder:text-slate-500"
               />
             </div>
           </div>
@@ -447,7 +524,7 @@ export function SettingsModal({ isOpen, onClose, apiUrl }: SettingsModalProps) {
               <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">GitHub Auto-Push</p>
               {hasGithubToken && (
                 <span className="ml-auto text-[10px] px-2 py-0.5 rounded-full bg-emerald-950/60 border border-emerald-500/40 text-emerald-400 font-semibold flex items-center gap-1">
-                  <Check className="w-3 h-3" /> Token saved
+                  <Check className="w-3 h-3" /> Token saved {githubTokenPreview ? `(${githubTokenPreview})` : ""}
                 </span>
               )}
             </div>
@@ -473,8 +550,8 @@ export function SettingsModal({ isOpen, onClose, apiUrl }: SettingsModalProps) {
                 type="password"
                 value={githubToken}
                 onChange={(e) => setGithubToken(e.target.value)}
-                placeholder="ghp_..."
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-cyan-500"
+                placeholder={hasGithubToken ? `Configured (${githubTokenPreview || "Active"}). Type new token to replace.` : "ghp_..."}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-cyan-500 placeholder:text-slate-500"
               />
             </div>
 
