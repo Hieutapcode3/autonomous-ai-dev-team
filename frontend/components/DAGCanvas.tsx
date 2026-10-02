@@ -11,6 +11,7 @@ import {
   useEdgesState,
   MarkerType,
   BackgroundVariant,
+  Position,
 } from "@xyflow/react";
 import { SubTaskNode, SubTaskNodeData } from "./SubTaskNode";
 
@@ -63,14 +64,18 @@ export function DAGCanvas({ tasks, executionOrder, onSelectTask }: DAGCanvasProp
       const indexInLayer = levelCurrentIndex[layer] || 0;
       levelCurrentIndex[layer] = indexInLayer + 1;
 
-      // Coordinate positioning: Y = layer * 220px, X centered
-      const y = layer * 220 + 40;
-      const x = (indexInLayer - (countInLayer - 1) / 2) * 320 + 380;
+      // Coordinate positioning for Horizontal DAG Layout:
+      // X = horizontal step along execution layer (Left -> Right)
+      // Y = vertical spacing for concurrent parallel tasks in the same layer
+      const x = layer * 380 + 80;
+      const y = (indexInLayer - (countInLayer - 1) / 2) * 260 + 100;
 
       calculatedNodes.push({
         id: tid,
         type: "subTask",
         position: { x, y },
+        sourcePosition: Position.Right,
+        targetPosition: Position.Left,
         data: {
           id: task.task_id,
           title: task.title,
@@ -88,7 +93,7 @@ export function DAGCanvas({ tasks, executionOrder, onSelectTask }: DAGCanvasProp
         },
       });
 
-      // Construct edges from dependencies
+      // Construct edges from dependencies connecting Right -> Left
       if (task.dependencies && Array.isArray(task.dependencies)) {
         task.dependencies.forEach((depId: string) => {
           const isReplanEdge = !!task.retry_of;
@@ -96,6 +101,9 @@ export function DAGCanvas({ tasks, executionOrder, onSelectTask }: DAGCanvasProp
             id: `e-${depId}-${tid}`,
             source: depId,
             target: tid,
+            sourceHandle: "source-right",
+            targetHandle: "target-left",
+            type: "smoothstep",
             animated: task.status === "running" || isReplanEdge,
             style: {
               stroke: isReplanEdge ? "#f97316" : task.status === "completed" ? "#10b981" : "#06b6d4",
@@ -105,6 +113,8 @@ export function DAGCanvas({ tasks, executionOrder, onSelectTask }: DAGCanvasProp
             markerEnd: {
               type: MarkerType.ArrowClosed,
               color: isReplanEdge ? "#f97316" : task.status === "completed" ? "#10b981" : "#06b6d4",
+              width: 18,
+              height: 18,
             },
           });
         });
