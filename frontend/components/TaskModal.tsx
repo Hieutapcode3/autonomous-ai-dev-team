@@ -42,7 +42,7 @@ const UNITY_TEMPLATES = [
 
 export function TaskModal({ isOpen, onClose, onSubmit, initialObjective }: TaskModalProps) {
   const [projectType, setProjectType] = useState<string>("unity");
-  const [projectPath, setProjectPath] = useState<string>("d:\\Unity\\Project\\ls004-block-home");
+  const [projectPath, setProjectPath] = useState<string>("d:\\Unity\\Project\\Category Search");
   const [objective, setObjective] = useState<string>(initialObjective || UNITY_TEMPLATES[0]);
   const [costConstrained, setCostConstrained] = useState<boolean>(false);
   const [simulateFailure, setSimulateFailure] = useState<boolean>(false);
@@ -51,6 +51,15 @@ export function TaskModal({ isOpen, onClose, onSubmit, initialObjective }: TaskM
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const savedPath = localStorage.getItem("last_project_path");
+      if (savedPath) {
+        setProjectPath(savedPath);
+      }
+    }
+  }, []);
 
   useEffect(() => {
     if (isOpen) {
@@ -104,6 +113,9 @@ export function TaskModal({ isOpen, onClose, onSubmit, initialObjective }: TaskM
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!objective.trim()) return;
+    if (typeof window !== "undefined" && projectPath.trim()) {
+      localStorage.setItem("last_project_path", projectPath.trim());
+    }
     onSubmit(
       objective.trim(),
       costConstrained,
@@ -211,6 +223,30 @@ export function TaskModal({ isOpen, onClose, onSubmit, initialObjective }: TaskM
                   : "border-slate-800 focus:border-cyan-400"
               }`}
             />
+
+            {/* Quick Pick Recent Projects */}
+            {projectType === "unity" && (
+              <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                <span className="text-[10px] text-slate-400">Quick select:</span>
+                {[
+                  "D:\\Unity\\Project\\Category Search",
+                  "D:\\Unity\\Project\\ls004-block-home",
+                ].map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => setProjectPath(p)}
+                    className={`px-2 py-0.5 rounded text-[10px] font-mono border transition-all ${
+                      projectPath === p
+                        ? "bg-purple-950 text-purple-200 border-purple-500 font-bold"
+                        : "bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200 hover:border-slate-700"
+                    }`}
+                  >
+                    {p.split("\\").pop()}
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="flex items-center gap-1.5 text-[10px] text-emerald-400">
               <ShieldCheck className="w-3.5 h-3.5" />
               <span>

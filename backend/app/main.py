@@ -181,12 +181,30 @@ async def list_sessions():
                 "session_id": sid,
                 "status": s.status,
                 "objective": s.objective,
+                "project_type": s.project_type,
+                "project_path": s.project_path,
+                "created_at": s.created_at,
+                "updated_at": s.updated_at,
+                "total_elapsed_time_sec": s.total_elapsed_time_sec,
+                "total_cost_usd": s.total_cost_usd,
                 "completed": len([t for t in s.tasks.values() if t.status == "completed"]),
                 "total": len(s.tasks),
+                "artifacts_count": len(s.artifacts_history),
+                "use_simulation": s.use_simulation,
             }
-            for sid, s in sessions.items()
+            for sid, s in reversed(list(sessions.items()))
         ]
     }
+
+
+@app.delete("/api/sessions/{session_id}")
+async def delete_session(session_id: str):
+    if session_id in sessions:
+        del sessions[session_id]
+        if session_id in orchestrators:
+            del orchestrators[session_id]
+        return {"status": "deleted", "session_id": session_id}
+    raise HTTPException(status_code=404, detail="Session not found")
 
 
 @app.get("/api/sessions/{session_id}", response_model=GlobalDAGState)
