@@ -2,16 +2,22 @@ import ast
 import json
 import re
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional, Callable, Awaitable
 from app.schemas import SubTask, VerifierResult, TaskDomain
 from app.sandbox import SandboxRuntime
+from app import unity_verifier
 
 
 class VerifierGate:
     def __init__(self, sandbox: SandboxRuntime):
         self.sandbox = sandbox
 
-    async def evaluate(self, task: SubTask, exec_result: Dict[str, Any]) -> VerifierResult:
+    async def evaluate(
+        self,
+        task: SubTask,
+        exec_result: Dict[str, Any],
+        log_callback: Optional[Callable[[str, str, str], Awaitable[None]]] = None,
+    ) -> VerifierResult:
         # Non-code utility tasks check tool exit codes
         if task.domain == TaskDomain.UTILITY:
             tool_success = exec_result.get("success", False)
@@ -52,14 +58,29 @@ class VerifierGate:
                 all_passed = False
                 error_logs.append(rule_check["error"])
 
-        # 2. Automated Test / Verification execution
+        # 2. Unity MCP live compile verification (for Unity projects with .cs files)
         is_unity_project = any(f.endswith(".cs") for f in created_files) or (self.sandbox.workspace / "Assets").exists()
 
-        if all_passed and is_unity_project:
+        if all_passed and is_unity_project and created_files:
+            unity_result = await unity_verifier.verify_unity_compilation(
+                changed_files=created_files,
+                log=log_callback,
+            )
+            for ck in unity_result.get("checks", []):
+                checks.append(ck)
+
+            if unity_result["unity_available"] and not unity_result["compile_passed"]:
+                all_passed = False
+                err_summary = unity_result["error_summary"]
+                error_logs.append(
+                    f"Unity Compile Errors (from Editor console):\n{err_summary}"
+                )
+        elif all_passed and is_unity_project:
+            # No files changed but it's a Unity project — mark as passed
             checks.append({
                 "check": "unity_csharp_validation",
                 "passed": True,
-                "output": "C# syntax and Unity rule compliance verified.",
+                "output": "No C# changes in this task — Unity compile check skipped.",
             })
 
         elif all_passed and (task.domain in [TaskDomain.IMPLEMENTATION, TaskDomain.VERIFICATION]):

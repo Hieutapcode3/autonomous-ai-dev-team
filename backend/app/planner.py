@@ -302,13 +302,25 @@ class PlannerEngine:
     def trigger_replan(self, state: GlobalDAGState, failed_task: SubTask) -> SubTask:
         replan_id = f"replan_{uuid.uuid4().hex[:6]}"
 
+        error_trace = failed_task.error_trace or "Verification gate rejection — no error detail."
+
+        # Build a structured description so the fix agent knows exactly what to address
+        fix_description = (
+            f"CRITICAL FIX REQUIRED for task: '{failed_task.title}'\n\n"
+            f"The previous implementation was rejected by the Quality Gate. "
+            f"You MUST fix ALL errors below and rewrite the affected files completely.\n\n"
+            f"=== ERROR TRACE ===\n{error_trace}\n===================\n\n"
+            f"Instructions:\n"
+            f"- Read each error message carefully and fix the root cause in the C# code.\n"
+            f"- Do NOT just remove the failing line — understand why it fails and implement the correct solution.\n"
+            f"- Output the COMPLETE fixed file contents (not just diffs) in code_changes.\n"
+            f"- Target files that must be fixed: {', '.join(failed_task.target_files) if failed_task.target_files else 'same as failed task'}."
+        )
+
         fix_task = SubTask(
             task_id=replan_id,
-            title=f"Fix & Refine: {failed_task.title}",
-            description=(
-                f"Resolved regression or verification failure in {failed_task.title}.\n"
-                f"Error diagnosis: {failed_task.error_trace or 'Verification gate rejection'}"
-            ),
+            title=f"[FIX] {failed_task.title}",
+            description=fix_description,
             domain=failed_task.domain,
             complexity=min(10, failed_task.complexity + 1),
             dependencies=[failed_task.task_id],

@@ -319,14 +319,18 @@ class TeamOrchestrator:
                 self.state.total_cost_usd += cost
                 task.execution_time_ms = round((time.time() - start_time) * 1000, 2)
 
-                # 3. Deterministic Verifier Gate
+                # 3. Deterministic Verifier Gate (includes live Unity compile check)
                 await self._update_fleet("IDLE", "IDLE", "VERIFYING")
-                await self._emit_log("Verifier", f"Quality Gate analyzing output of #{task.task_id} (Syntax, AST, Tests)...")
+                await self._emit_log("Verifier", f"Quality Gate analyzing output of #{task.task_id} (Syntax + Unity MCP compile)...")
 
-                verify_result = await self.verifier.evaluate(task, {
-                    "artifacts": {"files": list(code_changes.keys())},
-                    "success": True,
-                })
+                verify_result = await self.verifier.evaluate(
+                    task,
+                    {
+                        "artifacts": {"files": list(code_changes.keys())},
+                        "success": True,
+                    },
+                    log_callback=self._emit_log,
+                )
 
                 if verify_result.passed:
                     task.status = TaskStatus.COMPLETED
@@ -345,12 +349,24 @@ class TeamOrchestrator:
                 else:
                     task.status = TaskStatus.FAILED
                     task.error_trace = verify_result.error_log
-                    await self._emit_log("Verifier", f"Quality Gate REJECTED #{task.task_id}!\n{verify_result.error_log}", "ERROR")
+                    # Enrich error trace with file context for the replan LLM
+                    changed_cs = [f for f in code_changes.keys() if f.endswith(".cs")]
+                    if changed_cs:
+                        file_ctx = "Files modified: " + ", ".join(changed_cs)
+                        task.error_trace = f"{file_ctx}\n\n{task.error_trace or ''}"
+                    await self._emit_log(
+                        "Verifier",
+                        f"Quality Gate REJECTED #{task.task_id}!\n{verify_result.error_log}",
+                        "ERROR",
+                    )
                     await self._broadcast("TASK_FAILED", task.model_dump())
 
-                    # 4. Trigger Adaptive Replanning
+                    # 4. Trigger Adaptive Replanning with full compile error context
                     await self._update_fleet("REPLANNING", "IDLE", "IDLE")
-                    await self._emit_log("Replanner", f"Triggering Adaptive Replanning to inject fix node for #{task.task_id}...")
+                    await self._emit_log(
+                        "Replanner",
+                        f"Triggering Adaptive Replanning — injecting fix node for #{task.task_id} with compile error context...",
+                    )
                     fix_task = self.planner.trigger_replan(self.state, task)
                     await self._broadcast("REPLAN_TRIGGERED", {
                         "failed_task_id": task.task_id,
