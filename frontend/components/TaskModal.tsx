@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { X, Sparkles, ShieldAlert, Gamepad2, Globe, ShieldCheck, Image as ImageIcon, Video, UploadCloud, Trash2, Loader2 } from "lucide-react";
+import { X, Sparkles, ShieldAlert, Gamepad2, Globe, ShieldCheck, Image as ImageIcon, Video, UploadCloud, Trash2, Loader2, Code2, ExternalLink } from "lucide-react";
 
 export interface ReferenceMediaItem {
   name: string;
@@ -8,6 +8,7 @@ export interface ReferenceMediaItem {
   url: string;
   media_type: string;
   size_bytes?: number;
+  extracted_logic?: any;
 }
 
 interface TaskModalProps {
@@ -232,13 +233,13 @@ export function TaskModal({ isOpen, onClose, onSubmit, initialObjective }: TaskM
             </div>
           </div>
 
-          {/* Visual & Art References Section */}
+          {/* Visual & Playable References Section */}
           <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-3 flex flex-col gap-2.5">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <ImageIcon className="w-4 h-4 text-cyan-400" />
                 <label className="text-xs font-semibold text-slate-300 uppercase tracking-wider">
-                  Visual & Art References (Images / Videos)
+                  Visual, Video & HTML Demo References
                 </label>
               </div>
               <span className="text-[11px] text-slate-400 font-mono">
@@ -247,14 +248,14 @@ export function TaskModal({ isOpen, onClose, onSubmit, initialObjective }: TaskM
             </div>
 
             <p className="text-[11px] text-slate-400 leading-normal">
-              Upload UI mockups, art references, or gameplay clips. Vision-capable models will analyze layout anchors, composition, and visual hierarchy.
+              Upload UI mockups, gameplay videos, or an HTML playable game demo (<span className="text-amber-300 font-mono">.html</span>). Vision models analyze layout/art, while engineering agents parse core JS game loops and mechanics into Unity C#.
             </p>
 
             <input
               ref={fileInputRef}
               type="file"
               multiple
-              accept="image/*,video/mp4,video/webm,video/quicktime"
+              accept="image/*,video/mp4,video/webm,video/quicktime,.html,.htm"
               className="hidden"
               onChange={(e) => handleFileUpload(e.target.files)}
             />
@@ -271,18 +272,18 @@ export function TaskModal({ isOpen, onClose, onSubmit, initialObjective }: TaskM
               {isUploading ? (
                 <div className="flex items-center gap-2 text-xs text-cyan-400">
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>Uploading reference media...</span>
+                  <span>Uploading reference or demo file...</span>
                 </div>
               ) : (
                 <>
                   <div className="flex items-center gap-2 text-slate-400">
                     <UploadCloud className="w-5 h-5 text-cyan-400" />
                     <span className="text-xs font-medium text-slate-300">
-                      Click or drag images & videos here
+                      Click or drag images, videos & HTML game demos here
                     </span>
                   </div>
                   <div className="flex items-center gap-2 text-[10px] text-slate-500 font-mono">
-                    <span>PNG, JPG, WEBP, MP4, WEBM</span>
+                    <span>PNG, JPG, WEBP, MP4, WEBM, HTML DEMO</span>
                   </div>
                 </>
               )}
@@ -307,10 +308,15 @@ export function TaskModal({ isOpen, onClose, onSubmit, initialObjective }: TaskM
                         alt={media.name}
                         className="w-12 h-12 object-cover rounded-md border border-slate-700 shrink-0"
                       />
-                    ) : (
+                    ) : media.media_type === "video" ? (
                       <div className="w-12 h-12 bg-purple-950/80 border border-purple-500/40 rounded-md flex flex-col items-center justify-center text-purple-300 shrink-0">
                         <Video className="w-5 h-5" />
                         <span className="text-[8px] font-bold mt-0.5">VIDEO</span>
+                      </div>
+                    ) : (
+                      <div className="w-12 h-12 bg-amber-950/80 border border-amber-500/40 rounded-md flex flex-col items-center justify-center text-amber-300 shrink-0">
+                        <Code2 className="w-5 h-5" />
+                        <span className="text-[8px] font-bold mt-0.5">HTML DEMO</span>
                       </div>
                     )}
                     <div className="flex-1 min-w-0">
@@ -321,7 +327,24 @@ export function TaskModal({ isOpen, onClose, onSubmit, initialObjective }: TaskM
                         {media.media_type}
                         {media.size_bytes ? ` • ${Math.round(media.size_bytes / 1024)} KB` : ""}
                       </div>
+                      {media.extracted_logic?.functions && media.extracted_logic.functions.length > 0 && (
+                        <div className="text-[9px] text-amber-300/80 truncate font-mono">
+                          fn: {media.extracted_logic.functions.slice(0, 3).join(", ")}
+                          {media.extracted_logic.functions.length > 3 ? "..." : ""}
+                        </div>
+                      )}
                     </div>
+                    {media.media_type === "html" && (
+                      <a
+                        href={media.url.startsWith("http") ? media.url : `http://localhost:8000${media.url}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="p-1 text-slate-400 hover:text-cyan-300 rounded transition-colors"
+                        title="Play / Inspect HTML Demo"
+                      >
+                        <ExternalLink className="w-4 h-4" />
+                      </a>
+                    )}
                     <button
                       type="button"
                       onClick={() => removeReference(idx)}

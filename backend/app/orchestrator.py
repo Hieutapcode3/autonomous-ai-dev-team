@@ -158,9 +158,18 @@ class TeamOrchestrator:
                 "Multimodal art style, UI layout anchors, and visual composition bound to Game Architect.",
                 "INFO"
             )
+        if self.state.demo_html:
+            demo_name = self.state.demo_html.get('name', 'game_demo.html')
+            logic_meta = self.state.demo_html.get('extracted_logic') or {}
+            funcs = logic_meta.get('functions', [])
+            await self._emit_log(
+                "ContextLoader",
+                f"Ingested Playable HTML Game Demo: '{demo_name}' (Extracted {len(funcs)} JS functions & mechanics). Bound to Planner & C# Engineers.",
+                "SUCCESS"
+            )
         await self._emit_log(
             "ContextLoader",
-            "Rule, Skill & Visual Reference Ingestion Gate PASSED. All guidelines bound to Agent Fleet.",
+            "Rule, Skill, Visual Reference & Playable Demo Ingestion Gate PASSED. All guidelines bound to Agent Fleet.",
             "SUCCESS"
         )
 
@@ -241,6 +250,7 @@ class TeamOrchestrator:
                         "rules": self.state.ingested_rules,
                         "skills": self.state.ingested_skills,
                         "reference_media": self.state.reference_media,
+                        "demo_html": self.state.demo_html,
                     },
                     simulate_error=should_fail,
                     log_callback=self._emit_log,

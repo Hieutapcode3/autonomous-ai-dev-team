@@ -76,6 +76,7 @@ class GlobalDAGState(BaseModel):
     ingested_skills: List[Dict[str, Any]] = Field(default_factory=list)
     context_summary: Optional[str] = None
     reference_media: List[Dict[str, Any]] = Field(default_factory=list)
+    demo_html: Optional[Dict[str, Any]] = None
 
 
 class VerifierResult(BaseModel):
@@ -113,6 +114,7 @@ class CreateSessionRequest(BaseModel):
     max_iterations: int = 15
     selected_provider_override: Optional[ModelProvider] = None
     reference_media: List[Dict[str, Any]] = Field(default_factory=list)
+    demo_html: Optional[Dict[str, Any]] = None
 
 
 class ConfigSettings(BaseModel):

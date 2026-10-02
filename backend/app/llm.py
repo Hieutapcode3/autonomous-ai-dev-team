@@ -124,12 +124,28 @@ class LLMClient:
             else "None."
         )
 
+        demo_html = context.get("demo_html")
+        demo_text = "None."
+        if demo_html:
+            extracted = demo_html.get("extracted_logic") or {}
+            funcs_str = ", ".join(extracted.get("functions", []))
+            vars_str = ", ".join(extracted.get("variables", []))
+            code_snippet = extracted.get("code_snippet", "")
+            demo_text = (
+                f"- Playable Demo: {demo_html.get('name')} ({demo_html.get('file_path')})\n"
+                f"  Extracted Functions: {funcs_str}\n"
+                f"  Variables/Constants: {vars_str}\n"
+                f"  Code/Logic Excerpt:\n```javascript\n{code_snippet[:2000]}\n```"
+            )
+
         system_prompt = (
             "You are an autonomous senior software engineer agent in a multi-agent team.\n\n"
             f"MANDATORY PROJECT RULES (NON-NEGOTIABLE):\n{rules_text}\n\n"
             f"AVAILABLE WORKFLOW SKILLS:\n{skills_text}\n\n"
             f"VISUAL & ART REFERENCES:\n{media_text}\n"
             "Analyze and adhere to the visual composition, UI anchors, spatial hierarchy, and art style conveyed in the reference media.\n\n"
+            f"PLAYABLE HTML GAME DEMO & MECHANICS:\n{demo_text}\n"
+            "If a playable HTML demo is provided, extract its core game loop, event handlers, math formulas, collision detection, and scoring mechanics, and port them faithfully into clean, idiomatic Unity C# scripts.\n\n"
             "You must return your output strictly in JSON format with keys:\n"
             "- 'files': list of file paths created or modified\n"
             "- 'code_changes': dict mapping file_path to complete code content\n"
@@ -584,11 +600,25 @@ class LLMClient:
                 target = "Assets/Scripts/Architecture/GameArchitectureSpec.md"
                 files.append(target)
                 ref_media = context.get("reference_media", [])
+                demo_html = context.get("demo_html")
                 ref_section = ""
                 if ref_media:
                     ref_section = "\n## Visual & Art References Analyzed\n"
                     for m in ref_media:
                         ref_section += f"- **{m.get('name')}** ({m.get('media_type', 'image')})\n  - Path: `{m.get('file_path')}`\n  - Art & Composition Directives: UI anchor alignment, color theme mapping, and visual hierarchy integrated into hierarchy planning.\n"
+
+                demo_section = ""
+                if demo_html:
+                    extracted = demo_html.get("extracted_logic") or {}
+                    funcs = extracted.get("functions", [])
+                    funcs_desc = ", ".join(funcs[:8]) if funcs else "Core game loop & scoring"
+                    demo_section = (
+                        f"\n## Playable HTML Game Demo Mechanics Ported\n"
+                        f"- Prototype File: `{demo_html.get('name')}`\n"
+                        f"- Ported Mechanics: Canvas game loop translated to Unity MonoBehaviour Update() & FixedUpdate().\n"
+                        f"- Extracted Logic & Functions: {funcs_desc}\n"
+                        f"- Formula Translation: Converted JavaScript gameplay constants and loop mechanics into C# fields & events.\n"
+                    )
 
                 code_changes[target] = (
                     f"# Unity Game Architecture Specification\n\n"
@@ -597,13 +627,19 @@ class LLMClient:
                     f"- Zero Vietnamese comments in codebase (Enforcing RULE_NO_VIETNAMESE_IN_CODE)\n"
                     f"- ScriptableObject event channels for decoupled communication\n"
                     f"- Cached component references in Awake()\n"
-                    f"{ref_section}\n"
+                    f"{ref_section}"
+                    f"{demo_section}\n"
                     f"## Core Components\n"
                     f"- GameController.cs (Manager & game loop coordinator)\n"
                     f"- PrefabConfig.cs (ScriptableObject data definition)\n"
                 )
-                ref_suffix = f" with {len(ref_media)} visual reference(s) analyzed" if ref_media else ""
-                explanation = f"Generated Unity architecture blueprint and component contracts for {task.title}{ref_suffix}."
+                addons = []
+                if ref_media:
+                    addons.append(f"{len(ref_media)} visual reference(s)")
+                if demo_html:
+                    addons.append(f"playable HTML demo '{demo_html.get('name')}'")
+                addon_suffix = f" (incorporated {', '.join(addons)})" if addons else ""
+                explanation = f"Generated Unity architecture blueprint and component contracts for {task.title}{addon_suffix}."
 
             elif task.domain == TaskDomain.IMPLEMENTATION:
                 if "prefab" in task.title.lower() or "tool" in task.title.lower():

@@ -1,5 +1,5 @@
 import React from "react";
-import { Target, RotateCcw, DollarSign, Activity, CheckCircle, AlertTriangle, Clock, Timer, ShieldCheck, Gamepad2, Globe, Image as ImageIcon, Video, ExternalLink } from "lucide-react";
+import { Target, RotateCcw, DollarSign, Activity, CheckCircle, AlertTriangle, Clock, Timer, ShieldCheck, Gamepad2, Globe, Image as ImageIcon, Video, ExternalLink, Code2 } from "lucide-react";
 
 interface SessionStatsProps {
   objective: string;
@@ -107,15 +107,15 @@ export function SessionStats({
         {objective || "No active objective set"}
       </div>
 
-      {/* Visual Reference Previews */}
+      {/* Visual & Playable Demo Previews */}
       {referenceMedia && referenceMedia.length > 0 && (
         <div className="bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/60 flex flex-col gap-2">
           <div className="flex items-center justify-between text-[11px] font-semibold text-slate-300">
             <span className="flex items-center gap-1.5 text-cyan-400">
               <ImageIcon className="w-3.5 h-3.5" />
-              Visual Ref Inputs ({referenceMedia.length})
+              Visual & Playable Inputs ({referenceMedia.length})
             </span>
-            <span className="text-[10px] text-slate-500 font-mono">Art & Layout</span>
+            <span className="text-[10px] text-slate-500 font-mono">Art & Game Logic</span>
           </div>
           <div className="flex gap-2 overflow-x-auto pb-1">
             {referenceMedia.map((m, idx) => {
@@ -127,7 +127,7 @@ export function SessionStats({
                   target="_blank"
                   rel="noreferrer"
                   className="relative group shrink-0 rounded-lg overflow-hidden border border-slate-700/80 hover:border-cyan-400 transition-all"
-                  title={`${m.name} (${m.media_type}) - Click to preview`}
+                  title={`${m.name} (${m.media_type}) - Click to open/play`}
                 >
                   {m.media_type === "image" ? (
                     <img
@@ -135,10 +135,15 @@ export function SessionStats({
                       alt={m.name}
                       className="w-11 h-11 object-cover group-hover:scale-105 transition-transform"
                     />
-                  ) : (
+                  ) : m.media_type === "video" ? (
                     <div className="w-11 h-11 bg-purple-950 flex flex-col items-center justify-center text-purple-300">
                       <Video className="w-4 h-4" />
                       <span className="text-[7px] font-bold mt-0.5">VIDEO</span>
+                    </div>
+                  ) : (
+                    <div className="w-11 h-11 bg-amber-950/90 flex flex-col items-center justify-center text-amber-300">
+                      <Code2 className="w-4 h-4" />
+                      <span className="text-[7px] font-bold mt-0.5">HTML</span>
                     </div>
                   )}
                   <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
