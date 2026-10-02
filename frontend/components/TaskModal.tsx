@@ -20,16 +20,17 @@ interface TaskModalProps {
     simulateFailure: boolean,
     projectType: string,
     projectPath: string,
-    referenceMedia: ReferenceMediaItem[]
+    referenceMedia: ReferenceMediaItem[],
+    useSimulation: boolean
   ) => void;
   initialObjective?: string;
 }
 
 const WEB_TEMPLATES = [
-  "Build a Python order processing engine with tax calculation, unit tests, and validation.",
-  "Implement a user authentication and JWT session token verification pipeline.",
-  "Construct an asynchronous event-driven task queue with retry logic and telemetry metrics.",
-  "Fix memory leak and boundary condition errors in the matrix transformation module.",
+  "Build a Playable HTML5 Canvas 2D puzzle game prototype with juice, particle FX, and Web Audio.",
+  "Create a modern Next.js TypeScript responsive web application with interactive components.",
+  "Construct an asynchronous Python FastAPI order processing service with validation and tests.",
+  "Build a Go distributed task queue with worker pools and telemetry metrics.",
 ];
 
 const UNITY_TEMPLATES = [
@@ -45,6 +46,7 @@ export function TaskModal({ isOpen, onClose, onSubmit, initialObjective }: TaskM
   const [objective, setObjective] = useState<string>(initialObjective || UNITY_TEMPLATES[0]);
   const [costConstrained, setCostConstrained] = useState<boolean>(false);
   const [simulateFailure, setSimulateFailure] = useState<boolean>(false);
+  const [useSimulation, setUseSimulation] = useState<boolean>(true);
   const [referenceMedia, setReferenceMedia] = useState<ReferenceMediaItem[]>([]);
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -107,8 +109,9 @@ export function TaskModal({ isOpen, onClose, onSubmit, initialObjective }: TaskM
       costConstrained,
       simulateFailure,
       projectType,
-      projectType === "unity" ? projectPath.trim() : "",
-      referenceMedia
+      projectPath.trim(),
+      referenceMedia,
+      useSimulation
     );
     onClose();
   };
@@ -173,33 +176,50 @@ export function TaskModal({ isOpen, onClose, onSubmit, initialObjective }: TaskM
               >
                 <Globe className="w-5 h-5 text-cyan-400 shrink-0" />
                 <div>
-                  <div className="text-xs font-bold text-slate-100">Python / Web Sandbox</div>
-                  <div className="text-[10px] text-slate-400">Services, APIs, pytest harness</div>
+                  <div className="text-xs font-bold text-slate-100">Web, Game & Software Project</div>
+                  <div className="text-[10px] text-slate-400">HTML5 Canvas, Next.js, Python, Go, Rust</div>
                 </div>
               </button>
             </div>
           </div>
 
-          {/* Unity Project Path Input */}
-          {projectType === "unity" && (
-            <div className="bg-purple-950/20 border border-purple-500/30 rounded-xl p-3 flex flex-col gap-2">
-              <label className="text-[11px] font-semibold text-purple-300 uppercase tracking-wider">
-                Unity Project Workspace Directory
-              </label>
-              <input
-                type="text"
-                value={projectPath}
-                onChange={(e) => setProjectPath(e.target.value)}
-                placeholder="e.g. D:\Unity\Project\ls004-block-home"
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs font-mono text-slate-200 focus:outline-none focus:border-purple-400"
-                required
-              />
-              <div className="flex items-center gap-1.5 text-[10px] text-emerald-400">
-                <ShieldCheck className="w-3.5 h-3.5" />
-                <span>Phase 0 Ingestion: Auto-reads project rules, CLAUDE.md, .agents, and enforces English comments.</span>
-              </div>
+          {/* Project Workspace Directory Input (For both Unity and Web/Software) */}
+          <div className={`p-3 rounded-xl border flex flex-col gap-2 ${
+            projectType === "unity"
+              ? "bg-purple-950/20 border-purple-500/30"
+              : "bg-cyan-950/20 border-cyan-500/30"
+          }`}>
+            <label className={`text-[11px] font-semibold uppercase tracking-wider ${
+              projectType === "unity" ? "text-purple-300" : "text-cyan-300"
+            }`}>
+              {projectType === "unity"
+                ? "Unity Project Workspace Directory"
+                : "Project Destination Directory (Optional)"}
+            </label>
+            <input
+              type="text"
+              value={projectPath}
+              onChange={(e) => setProjectPath(e.target.value)}
+              placeholder={
+                projectType === "unity"
+                  ? "e.g. D:\\Unity\\Project\\ls004-block-home"
+                  : "e.g. D:\\Projects\\MyGameApp (or leave empty for Sandbox)"
+              }
+              className={`w-full bg-slate-950 border rounded-lg p-2.5 text-xs font-mono text-slate-200 focus:outline-none ${
+                projectType === "unity"
+                  ? "border-slate-800 focus:border-purple-400"
+                  : "border-slate-800 focus:border-cyan-400"
+              }`}
+            />
+            <div className="flex items-center gap-1.5 text-[10px] text-emerald-400">
+              <ShieldCheck className="w-3.5 h-3.5" />
+              <span>
+                {projectType === "unity"
+                  ? "Phase 0 Ingestion: Auto-reads project rules, CLAUDE.md, .agents, and enforces English comments."
+                  : "Code, assets, and project files will be created and written directly to this directory."}
+              </span>
             </div>
-          )}
+          </div>
 
           <div>
             <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
@@ -357,6 +377,48 @@ export function TaskModal({ isOpen, onClose, onSubmit, initialObjective }: TaskM
                 ))}
               </div>
             )}
+          </div>
+
+          {/* Execution Engine Mode: Fast Simulation vs Real AI Multi-Agent */}
+          <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-3 flex flex-col gap-2">
+            <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider">
+              Execution Engine Mode
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setUseSimulation(true)}
+                className={`p-2.5 rounded-xl border flex flex-col gap-1 transition-all text-left ${
+                  useSimulation
+                    ? "bg-cyan-950/60 border-cyan-500/80 text-cyan-200 shadow-md shadow-cyan-950"
+                    : "bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                <div className="text-xs font-bold text-slate-100 flex items-center gap-1.5">
+                  ⚡ Fast Simulation (~3-5s)
+                </div>
+                <div className="text-[10px] text-slate-400 leading-snug">
+                  Zero token cost. Rapidly tests DAG flow, websocket, UI state, and auto-replanning.
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setUseSimulation(false)}
+                className={`p-2.5 rounded-xl border flex flex-col gap-1 transition-all text-left ${
+                  !useSimulation
+                    ? "bg-purple-950/60 border-purple-500/80 text-purple-200 shadow-md shadow-purple-950"
+                    : "bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                <div className="text-xs font-bold text-slate-100 flex items-center gap-1.5">
+                  🤖 Real Multi-Agent (~2-10 min)
+                </div>
+                <div className="text-[10px] text-slate-400 leading-snug">
+                  Invokes LLM APIs / Local CLI (Gemini, Claude, GPT-4o, Ollama) to generate real code.
+                </div>
+              </button>
+            </div>
           </div>
 
           <div className="border-t border-slate-800 pt-3 flex flex-col gap-2.5">

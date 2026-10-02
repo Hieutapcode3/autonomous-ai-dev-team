@@ -77,6 +77,7 @@ class GlobalDAGState(BaseModel):
     context_summary: Optional[str] = None
     reference_media: List[Dict[str, Any]] = Field(default_factory=list)
     demo_html: Optional[Dict[str, Any]] = None
+    use_simulation: bool = True
 
 
 class VerifierResult(BaseModel):

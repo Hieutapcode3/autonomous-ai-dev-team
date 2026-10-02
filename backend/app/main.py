@@ -103,6 +103,7 @@ async def create_session(req: CreateSessionRequest):
     state.context_summary = context["summary"]
     state.reference_media = req.reference_media
     state.demo_html = req.demo_html or next((m for m in req.reference_media if m.get("media_type") == "html"), None)
+    state.use_simulation = req.use_simulation
     state.max_iterations = req.max_iterations
     sessions[session_id] = state
     return state
@@ -198,6 +199,7 @@ async def get_session(session_id: str):
 class RunOptions(BaseModel):
     simulate_failure: bool = False
     cost_constrained: bool = False
+    use_simulation: Optional[bool] = None
 
 
 @app.post("/api/sessions/{session_id}/run")
@@ -209,9 +211,16 @@ async def run_session(session_id: str, opts: RunOptions = RunOptions()):
     if state.status == "running":
         return {"message": "Session is already executing.", "status": "running"}
 
+    sim_mode = (
+        opts.use_simulation
+        if opts.use_simulation is not None
+        else getattr(state, "use_simulation", current_settings.simulation_mode)
+    )
+    llm_client.simulation_mode = sim_mode
+
     router = DynamicModelRouter(
         cost_constrained=opts.cost_constrained,
-        force_simulator=current_settings.simulation_mode,
+        force_simulator=sim_mode,
         use_local_provider=current_settings.use_local_provider,
         local_provider_type=current_settings.local_provider_type,
         ollama_model=current_settings.ollama_model,
