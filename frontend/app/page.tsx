@@ -23,6 +23,7 @@ import {
   PanelLeftOpen,
   CheckCircle2,
   History,
+  Square,
 } from "lucide-react";
 
 import { DAGCanvas } from "@/components/DAGCanvas";
@@ -35,6 +36,7 @@ import { SettingsModal } from "@/components/SettingsModal";
 import { RunConfirmModal } from "@/components/RunConfirmModal";
 import { ExecutionSummaryModal } from "@/components/ExecutionSummaryModal";
 import { SessionHistoryModal } from "@/components/SessionHistoryModal";
+import { StopConfirmModal } from "@/components/StopConfirmModal";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
 const WS_BASE = process.env.NEXT_PUBLIC_WS_URL || "ws://127.0.0.1:8000";
@@ -47,12 +49,14 @@ export default function ControlCenterPage() {
   const [activeBottomTab, setActiveBottomTab] = useState<"logs" | "artifacts" | "verifier">("logs");
   const [isTaskModalOpen, setIsTaskModalOpen] = useState<boolean>(false);
   const [isConfirmModalOpen, setIsConfirmModalOpen] = useState<boolean>(false);
+  const [isStopModalOpen, setIsStopModalOpen] = useState<boolean>(false);
   const [isSummaryModalOpen, setIsSummaryModalOpen] = useState<boolean>(false);
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState<boolean>(false);
   const [artifactsHistory, setArtifactsHistory] = useState<any[]>([]);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState<boolean>(false);
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [githubResult, setGithubResult] = useState<{ repo_url: string; commit_sha: string; repo_name: string } | null>(null);
+  const isInitializingRef = useRef(false);
 
   // Resizable panels state
   const [bottomPanelHeight, setBottomPanelHeight] = useState<number>(270);
@@ -121,9 +125,37 @@ export default function ControlCenterPage() {
     ]);
   }, []);
 
-  // Initialize or fetch first session
+  // Initialize or fetch first session without creating duplicate unexecuted sessions
   const initDefaultSession = useCallback(async () => {
+    if (isInitializingRef.current) return;
+    isInitializingRef.current = true;
+
     try {
+      // First check if there are existing sessions in backend
+      const listRes = await fetch(`${API_BASE}/api/sessions`);
+      if (listRes.ok) {
+        const listData = await listRes.json();
+        if (listData.sessions && listData.sessions.length > 0) {
+          const latestSid = listData.sessions[0].session_id;
+          const sessionRes = await fetch(`${API_BASE}/api/sessions/${latestSid}`);
+          if (sessionRes.ok) {
+            const data = await sessionRes.json();
+            setSessionId(data.session_id);
+            setSessionState(data);
+            if (data.artifacts_history) {
+              setArtifactsHistory(data.artifacts_history);
+            }
+            appendLog(
+              "Session",
+              `Restored existing session #${data.session_id}: "${data.objective}" [${(data.project_type || "generic").toUpperCase()}]`,
+              "SUCCESS"
+            );
+            return;
+          }
+        }
+      }
+
+      // If no session exists at all, create an initial default session
       const res = await fetch(`${API_BASE}/api/sessions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -266,6 +298,14 @@ export default function ControlCenterPage() {
             appendLog("GitHub", `Pushed to GitHub: ${data.repo_url}`, "SUCCESS");
             break;
 
+          case "RUN_STOPPED":
+            setSessionState((prev: any) => ({
+              ...(data.state || prev),
+              status: "stopped",
+            }));
+            appendLog("Orchestrator", data.message || "Workflow execution stopped by user.", "WARN");
+            break;
+
           default:
             break;
         }
@@ -303,14 +343,15 @@ export default function ControlCenterPage() {
   // Handle Run
   const handleRunWorkflow = async (
     simulateFailure: boolean = false,
-    overrideSimulation?: boolean
+    overrideSimulation?: boolean,
+    taskKey?: string
   ) => {
     if (!sessionId) return;
     const effectiveSim = overrideSimulation !== undefined ? overrideSimulation : useSimulationMode;
     try {
       appendLog(
         "Orchestrator",
-        `Triggering execution run [Engine: ${effectiveSim ? "FAST SIMULATION" : "REAL MULTI-AGENT LLM"}, Simulate Failure: ${simulateFailure}]...`
+        `Triggering execution run [Engine: ${effectiveSim ? "FAST SIMULATION" : "REAL MULTI-AGENT LLM"}, Simulate Failure: ${simulateFailure}${taskKey ? ", Task Key: Protected" : ""}]...`
       );
       let activeSid = sessionId;
       let res = await fetch(`${API_BASE}/api/sessions/${activeSid}/run`, {
@@ -320,6 +361,7 @@ export default function ControlCenterPage() {
           simulate_failure: simulateFailure,
           cost_constrained: false,
           use_simulation: effectiveSim,
+          task_key: taskKey || undefined,
         }),
       });
 
@@ -336,6 +378,7 @@ export default function ControlCenterPage() {
             project_path: sessionState?.project_path || "d:\\Unity\\Project\\ls004-block-home",
             max_iterations: 15,
             use_simulation: effectiveSim,
+            task_key: taskKey || undefined,
           }),
         });
         if (createRes.ok) {
@@ -350,19 +393,49 @@ export default function ControlCenterPage() {
               simulate_failure: simulateFailure,
               cost_constrained: false,
               use_simulation: effectiveSim,
+              task_key: taskKey || undefined,
             }),
           });
         }
       }
 
       if (res.ok) {
-        setSessionState((prev: any) => ({ ...prev, status: "running" }));
+        setSessionState((prev: any) => ({
+          ...prev,
+          status: "running",
+          task_key: taskKey || prev?.task_key,
+          has_task_key: Boolean(taskKey || prev?.has_task_key),
+        }));
       } else {
         const errData = await res.json().catch(() => ({}));
         appendLog("Orchestrator", `Failed to start run: ${errData.detail || res.statusText}`, "ERROR");
       }
     } catch {
       appendLog("System", "Failed to start workflow execution. Backend unreachable.", "ERROR");
+    }
+  };
+
+  // Handle Stop Workflow execution
+  const handleStopWorkflow = async (taskKey?: string): Promise<boolean> => {
+    if (!sessionId) return false;
+    try {
+      const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/stop`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ task_key: taskKey || undefined }),
+      });
+      if (res.ok) {
+        setSessionState((prev: any) => ({ ...prev, status: "stopped" }));
+        appendLog("Orchestrator", "Workflow execution manually stopped by user.", "WARN");
+        return true;
+      } else {
+        const err = await res.json().catch(() => ({}));
+        appendLog("Orchestrator", `Stop request failed: ${err.detail || res.statusText}`, "ERROR");
+        return false;
+      }
+    } catch {
+      appendLog("System", "Failed to connect to backend to stop session.", "ERROR");
+      return false;
     }
   };
 
@@ -523,18 +596,23 @@ export default function ControlCenterPage() {
             </button>
           )}
 
-          <button
-            onClick={() => setIsConfirmModalOpen(true)}
-            disabled={sessionState?.status === "running"}
-            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-lg ${
-              sessionState?.status === "running"
-                ? "bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700"
-                : "bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white shadow-cyan-500/20"
-            }`}
-          >
-            <Play className="w-3.5 h-3.5 fill-current" />
-            Run Workflow
-          </button>
+          {sessionState?.status === "running" ? (
+            <button
+              onClick={() => setIsStopModalOpen(true)}
+              className="px-3.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-lg bg-rose-600 hover:bg-rose-500 text-white shadow-rose-600/30 animate-pulse border border-rose-500"
+            >
+              <Square className="w-3.5 h-3.5 fill-current" />
+              Stop Workflow
+            </button>
+          ) : (
+            <button
+              onClick={() => setIsConfirmModalOpen(true)}
+              className="px-3.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-lg bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white shadow-cyan-500/20"
+            >
+              <Play className="w-3.5 h-3.5 fill-current" />
+              Run Workflow
+            </button>
+          )}
 
           <button
             onClick={() => handleRunWorkflow(true)}
@@ -865,13 +943,22 @@ export default function ControlCenterPage() {
       <RunConfirmModal
         isOpen={isConfirmModalOpen}
         onClose={() => setIsConfirmModalOpen(false)}
-        onConfirm={(simulateFailure, useSimulation) => {
-          handleRunWorkflow(simulateFailure, useSimulation);
+        onConfirm={(simulateFailure, useSimulation, taskKey) => {
+          handleRunWorkflow(simulateFailure, useSimulation, taskKey);
         }}
         sessionState={sessionState}
         currentSimulationMode={useSimulationMode}
         onToggleSimulationMode={(val) => setUseSimulationMode(val)}
         apiUrl={API_BASE}
+      />
+
+      {/* Stop Workflow Confirmation Modal */}
+      <StopConfirmModal
+        isOpen={isStopModalOpen}
+        onClose={() => setIsStopModalOpen(false)}
+        onConfirmStop={handleStopWorkflow}
+        hasTaskKey={Boolean(sessionState?.has_task_key || sessionState?.task_key)}
+        sessionId={sessionId}
       />
 
       {/* Execution Summary Report Modal */}

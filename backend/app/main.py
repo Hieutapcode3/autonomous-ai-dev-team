@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from app.schemas import (
     GlobalDAGState,
     CreateSessionRequest,
+    StopSessionRequest,
     WebSocketEvent,
     ConfigSettings,
 )
@@ -105,6 +106,9 @@ async def create_session(req: CreateSessionRequest):
     state.demo_html = req.demo_html or next((m for m in req.reference_media if m.get("media_type") == "html"), None)
     state.use_simulation = req.use_simulation
     state.max_iterations = req.max_iterations
+    if req.task_key:
+        state.task_key = req.task_key.strip()
+        state.has_task_key = True
     sessions[session_id] = state
     return state
 
@@ -191,10 +195,26 @@ async def list_sessions():
                 "total": len(s.tasks),
                 "artifacts_count": len(s.artifacts_history),
                 "use_simulation": s.use_simulation,
+                "has_task_key": bool(getattr(s, "task_key", None)),
+                "has_run": s.status in ["running", "completed", "failed", "stopped"] and (s.total_elapsed_time_sec > 0 or len(s.artifacts_history) > 0 or any(t.status == "completed" for t in s.tasks.values())),
             }
             for sid, s in reversed(list(sessions.items()))
         ]
     }
+
+
+@app.delete("/api/sessions/unexecuted")
+async def clear_unexecuted_sessions():
+    """Delete all sessions that were never executed (no completed tasks and no elapsed time)."""
+    to_delete = [
+        sid for sid, s in list(sessions.items())
+        if s.status in ["idle", "active"] and not any(t.status == "completed" for t in s.tasks.values()) and s.total_elapsed_time_sec == 0
+    ]
+    for sid in to_delete:
+        del sessions[sid]
+        if sid in orchestrators:
+            del orchestrators[sid]
+    return {"deleted_count": len(to_delete), "deleted_sessions": to_delete}
 
 
 @app.delete("/api/sessions/{session_id}")
@@ -205,6 +225,43 @@ async def delete_session(session_id: str):
             del orchestrators[session_id]
         return {"status": "deleted", "session_id": session_id}
     raise HTTPException(status_code=404, detail="Session not found")
+
+
+@app.post("/api/sessions/{session_id}/stop")
+async def stop_session(session_id: str, req: StopSessionRequest = StopSessionRequest()):
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    state = sessions[session_id]
+
+    # Verify task key if configured
+    if getattr(state, "task_key", None):
+        submitted_key = (req.task_key or "").strip()
+        expected_key = state.task_key.strip()
+        if submitted_key != expected_key:
+            raise HTTPException(
+                status_code=403,
+                detail="Mã Task Key không chính xác. Không thể dừng quy trình đang chạy!",
+            )
+
+    orch = orchestrators.get(session_id)
+    if orch:
+        orch.stop_execution()
+
+    state.status = "stopped"
+    await manager.broadcast_event(
+        WebSocketEvent(
+            event_type="RUN_STOPPED",
+            session_id=session_id,
+            timestamp=time.time(),
+            data={
+                "session_id": session_id,
+                "status": "stopped",
+                "message": "Workflow stopped by user request.",
+            },
+        )
+    )
+    return {"status": "stopped", "session_id": session_id}
 
 
 @app.get("/api/sessions/{session_id}", response_model=GlobalDAGState)
@@ -218,6 +275,7 @@ class RunOptions(BaseModel):
     simulate_failure: bool = False
     cost_constrained: bool = False
     use_simulation: Optional[bool] = None
+    task_key: Optional[str] = None
 
 
 @app.post("/api/sessions/{session_id}/run")
@@ -228,6 +286,10 @@ async def run_session(session_id: str, opts: RunOptions = RunOptions()):
     state = sessions[session_id]
     if state.status == "running":
         return {"message": "Session is already executing.", "status": "running"}
+
+    if opts.task_key:
+        state.task_key = opts.task_key.strip()
+        state.has_task_key = True
 
     sim_mode = (
         opts.use_simulation

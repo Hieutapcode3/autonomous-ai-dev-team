@@ -38,6 +38,10 @@ class TeamOrchestrator:
         self._has_simulated_failure = False
         self.github_token = github_token
         self.auto_push_github = auto_push_github
+        self._stop_requested = False
+
+    def stop_execution(self) -> None:
+        self._stop_requested = True
 
     async def _broadcast(self, event_type: str, data: Dict[str, Any]):
         if self.emit_event:
@@ -179,6 +183,14 @@ class TeamOrchestrator:
         max_replans = self.state.max_iterations
 
         while True:
+            if self._stop_requested:
+                self.state.status = "stopped"
+                self.state.total_elapsed_time_sec = round(time.time() - pipeline_start_time, 2)
+                await self._update_fleet("IDLE", "IDLE", "IDLE")
+                await self._emit_log("Orchestrator", "Workflow execution manually stopped by user.", "WARN")
+                await self._broadcast("RUN_STOPPED", {"session_id": self.state.session_id, "status": "STOPPED", "state": self.state.model_dump()})
+                return {"status": "STOPPED", "state": self.state.model_dump()}
+
             superseded_ids = {t.retry_of for t in self.state.tasks.values() if t.retry_of}
             active_tasks = [t for t in self.state.tasks.values() if t.task_id not in superseded_ids]
             uncompleted = [t for t in active_tasks if t.status != TaskStatus.COMPLETED]
@@ -222,6 +234,9 @@ class TeamOrchestrator:
             replan_needed = False
 
             for task in batch_tasks:
+                if self._stop_requested:
+                    break
+
                 # 1. Dynamic Model Routing
                 await self._update_fleet("ACTIVE", "IDLE", "IDLE")
                 allocated_model, rationale = self.router.route_task(task)
@@ -334,6 +349,14 @@ class TeamOrchestrator:
         superseded_ids = {t.retry_of for t in self.state.tasks.values() if t.retry_of}
         active_tasks = [t for t in self.state.tasks.values() if t.task_id not in superseded_ids]
         uncompleted = [t for t in active_tasks if t.status != TaskStatus.COMPLETED]
+        if self._stop_requested:
+            self.state.status = "stopped"
+            self.state.total_elapsed_time_sec = round(time.time() - pipeline_start_time, 2)
+            await self._update_fleet("IDLE", "IDLE", "IDLE")
+            await self._emit_log("Orchestrator", "Workflow execution manually stopped by user.", "WARN")
+            await self._broadcast("RUN_STOPPED", {"session_id": self.state.session_id, "status": "STOPPED", "state": self.state.model_dump()})
+            return {"status": "STOPPED", "state": self.state.model_dump()}
+
         if uncompleted:
             self.state.status = "failed"
             await self._update_fleet("IDLE", "IDLE", "IDLE")

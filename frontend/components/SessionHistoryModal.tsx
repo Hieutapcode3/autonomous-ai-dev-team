@@ -18,6 +18,7 @@ import {
   Play,
   ArrowRight,
   RefreshCw,
+  KeyRound,
 } from "lucide-react";
 
 export interface SessionHistoryItem {
@@ -34,6 +35,8 @@ export interface SessionHistoryItem {
   total: number;
   artifacts_count?: number;
   use_simulation?: boolean;
+  has_task_key?: boolean;
+  has_run?: boolean;
 }
 
 interface SessionHistoryModalProps {
@@ -97,6 +100,23 @@ export function SessionHistoryModal({
     }
   };
 
+  const [clearingDrafts, setClearingDrafts] = useState(false);
+
+  const handleClearDrafts = async () => {
+    if (!confirm("Clear all unexecuted / draft sessions from history?")) return;
+    setClearingDrafts(true);
+    try {
+      const res = await fetch(`${apiUrl}/api/sessions/unexecuted`, { method: "DELETE" });
+      if (res.ok) {
+        await fetchSessions();
+      }
+    } catch {
+      // Ignore background delete error
+    } finally {
+      setClearingDrafts(false);
+    }
+  };
+
   const handleOpenReport = async (e: React.MouseEvent, sid: string) => {
     e.stopPropagation();
     try {
@@ -150,6 +170,15 @@ export function SessionHistoryModal({
           </div>
 
           <div className="flex items-center gap-2">
+            <button
+              onClick={handleClearDrafts}
+              disabled={clearingDrafts || isLoading}
+              title="Delete all sessions that were never executed"
+              className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-slate-400 hover:text-amber-300 hover:bg-amber-950/40 border border-slate-800 hover:border-amber-500/40 transition-colors flex items-center gap-1.5"
+            >
+              <Trash2 className="w-3.5 h-3.5 text-amber-400" />
+              Clear Drafts
+            </button>
             <button
               onClick={fetchSessions}
               disabled={isLoading}
@@ -215,19 +244,29 @@ export function SessionHistoryModal({
                       </span>
                       {isCurrent && (
                         <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-500/40 font-bold uppercase">
-                          ACTIVE
+                          CURRENT
+                        </span>
+                      )}
+                      {s.has_task_key && (
+                        <span className="flex items-center gap-1 text-[9px] font-mono px-1.5 py-0.5 rounded bg-indigo-950 text-indigo-300 border border-indigo-500/40 font-bold" title="Protected by Task Key">
+                          <KeyRound className="w-2.5 h-2.5 text-indigo-400" />
+                          KEY
                         </span>
                       )}
                       <span
                         className={`text-[9px] font-mono px-2 py-0.5 rounded-full font-bold uppercase ${
-                          isCompleted
+                          s.has_run === false
+                            ? "bg-slate-800 text-slate-400 border border-slate-700"
+                            : isCompleted
                             ? "bg-emerald-950 text-emerald-300 border border-emerald-800"
                             : isRunning
                             ? "bg-blue-950 text-blue-300 border border-blue-800 animate-pulse"
-                            : "bg-slate-800 text-slate-400"
+                            : s.status === "stopped"
+                            ? "bg-amber-950 text-amber-300 border border-amber-800"
+                            : "bg-rose-950 text-rose-300 border border-rose-800"
                         }`}
                       >
-                        {s.status}
+                        {s.has_run === false ? "DRAFT (NOT RUN)" : s.status}
                       </span>
                     </div>
 
