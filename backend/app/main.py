@@ -218,10 +218,18 @@ async def run_session(session_id: str, opts: RunOptions = RunOptions()):
     )
     llm_client.simulation_mode = sim_mode
 
+    has_cloud_keys = bool(
+        llm_client.anthropic_key
+        or llm_client.openai_key
+        or llm_client.google_key
+        or llm_client.openrouter_key
+    )
+    use_local = current_settings.use_local_provider or (not sim_mode and not has_cloud_keys)
+
     router = DynamicModelRouter(
         cost_constrained=opts.cost_constrained,
         force_simulator=sim_mode,
-        use_local_provider=current_settings.use_local_provider,
+        use_local_provider=use_local,
         local_provider_type=current_settings.local_provider_type,
         ollama_model=current_settings.ollama_model,
     )

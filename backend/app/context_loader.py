@@ -207,9 +207,27 @@ class ProjectContextLoader:
         rules = cls.discover_rules(project_path, resolved_type)
         skills = cls.discover_skills(project_path)
 
+        discovered_scripts: List[str] = []
+        if project_path and resolved_type == "unity":
+            p = Path(project_path)
+            assets_dir = p / "Assets"
+            if assets_dir.exists() and assets_dir.is_dir():
+                for cs_file in assets_dir.rglob("*.cs"):
+                    rel_p = str(cs_file.relative_to(p)).replace("\\", "/")
+                    if "Plugins" not in rel_p and "TutorialInfo" not in rel_p:
+                        discovered_scripts.append(rel_p)
+                if discovered_scripts:
+                    rules.append({
+                        "id": "project_existing_scripts",
+                        "title": f"Existing Project C# Scripts ({len(discovered_scripts)} found)",
+                        "content": "Existing project C# scripts available to inspect and modify:\n" + "\n".join([f"- {s}" for s in discovered_scripts[:60]]),
+                        "source": "Project Assets Scan",
+                    })
+
         summary = (
             f"Project: {project_path or 'Sandbox'} | Type: [{resolved_type.upper()}] | "
             f"Ingested Rules: {len(rules)} | Discovered Skills: {len(skills)}"
+            + (f" | Existing Scripts: {len(discovered_scripts)}" if discovered_scripts else "")
         )
 
         return {
@@ -218,4 +236,5 @@ class ProjectContextLoader:
             "rules": rules,
             "skills": skills,
             "summary": summary,
+            "discovered_scripts": discovered_scripts,
         }

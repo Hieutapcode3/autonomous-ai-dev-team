@@ -21,6 +21,7 @@ import {
   Minimize2,
   PanelLeftClose,
   PanelLeftOpen,
+  CheckCircle2,
 } from "lucide-react";
 
 import { DAGCanvas } from "@/components/DAGCanvas";
@@ -30,6 +31,8 @@ import { TerminalLog, LogEntry } from "@/components/TerminalLog";
 import { CodeArtifactViewer } from "@/components/CodeArtifactViewer";
 import { TaskModal } from "@/components/TaskModal";
 import { SettingsModal } from "@/components/SettingsModal";
+import { RunConfirmModal } from "@/components/RunConfirmModal";
+import { ExecutionSummaryModal } from "@/components/ExecutionSummaryModal";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
 const WS_BASE = process.env.NEXT_PUBLIC_WS_URL || "ws://127.0.0.1:8000";
@@ -41,6 +44,9 @@ export default function ControlCenterPage() {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [activeBottomTab, setActiveBottomTab] = useState<"logs" | "artifacts" | "verifier">("logs");
   const [isTaskModalOpen, setIsTaskModalOpen] = useState<boolean>(false);
+  const [isConfirmModalOpen, setIsConfirmModalOpen] = useState<boolean>(false);
+  const [isSummaryModalOpen, setIsSummaryModalOpen] = useState<boolean>(false);
+  const [artifactsHistory, setArtifactsHistory] = useState<any[]>([]);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState<boolean>(false);
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [githubResult, setGithubResult] = useState<{ repo_url: string; commit_sha: string; repo_name: string } | null>(null);
@@ -243,6 +249,12 @@ export default function ControlCenterPage() {
 
           case "RUN_FINISHED":
             setSessionState(data.state);
+            if (data.artifacts_history && data.artifacts_history.length > 0) {
+              setArtifactsHistory(data.artifacts_history);
+            } else if (data.state?.artifacts_history) {
+              setArtifactsHistory(data.state.artifacts_history);
+            }
+            setIsSummaryModalOpen(true);
             appendLog("Orchestrator", `Execution finished with status: ${data.status}`, data.status === "SUCCESS" ? "SUCCESS" : "ERROR");
             break;
 
@@ -286,12 +298,16 @@ export default function ControlCenterPage() {
   }, [sessionId, sessionState?.status]);
 
   // Handle Run
-  const handleRunWorkflow = async (simulateFailure: boolean = false) => {
+  const handleRunWorkflow = async (
+    simulateFailure: boolean = false,
+    overrideSimulation?: boolean
+  ) => {
     if (!sessionId) return;
+    const effectiveSim = overrideSimulation !== undefined ? overrideSimulation : useSimulationMode;
     try {
       appendLog(
         "Orchestrator",
-        `Triggering execution run [Engine: ${useSimulationMode ? "FAST SIMULATION" : "REAL MULTI-AGENT LLM"}, Simulate Failure: ${simulateFailure}]...`
+        `Triggering execution run [Engine: ${effectiveSim ? "FAST SIMULATION" : "REAL MULTI-AGENT LLM"}, Simulate Failure: ${simulateFailure}]...`
       );
       let activeSid = sessionId;
       let res = await fetch(`${API_BASE}/api/sessions/${activeSid}/run`, {
@@ -300,7 +316,7 @@ export default function ControlCenterPage() {
         body: JSON.stringify({
           simulate_failure: simulateFailure,
           cost_constrained: false,
-          use_simulation: useSimulationMode,
+          use_simulation: effectiveSim,
         }),
       });
 
@@ -316,7 +332,7 @@ export default function ControlCenterPage() {
             project_type: sessionState?.project_type || "unity",
             project_path: sessionState?.project_path || "d:\\Unity\\Project\\ls004-block-home",
             max_iterations: 15,
-            use_simulation: useSimulationMode,
+            use_simulation: effectiveSim,
           }),
         });
         if (createRes.ok) {
@@ -330,7 +346,7 @@ export default function ControlCenterPage() {
             body: JSON.stringify({
               simulate_failure: simulateFailure,
               cost_constrained: false,
-              use_simulation: useSimulationMode,
+              use_simulation: effectiveSim,
             }),
           });
         }
@@ -486,8 +502,18 @@ export default function ControlCenterPage() {
             New Objective
           </button>
 
+          {sessionState?.status === "completed" && (
+            <button
+              onClick={() => setIsSummaryModalOpen(true)}
+              className="px-3 py-1.5 rounded-xl bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-500/50 text-xs font-semibold text-emerald-300 flex items-center gap-1.5 transition-all shadow-sm shadow-emerald-900/30"
+            >
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+              Summary Report
+            </button>
+          )}
+
           <button
-            onClick={() => handleRunWorkflow(false)}
+            onClick={() => setIsConfirmModalOpen(true)}
             disabled={sessionState?.status === "running"}
             className={`px-3.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-lg ${
               sessionState?.status === "running"
@@ -822,6 +848,31 @@ export default function ControlCenterPage() {
         isOpen={isSettingsModalOpen}
         onClose={() => setIsSettingsModalOpen(false)}
         apiUrl={API_BASE}
+      />
+
+      {/* Pre-Run Confirmation Modal */}
+      <RunConfirmModal
+        isOpen={isConfirmModalOpen}
+        onClose={() => setIsConfirmModalOpen(false)}
+        onConfirm={(simulateFailure, useSimulation) => {
+          handleRunWorkflow(simulateFailure, useSimulation);
+        }}
+        sessionState={sessionState}
+        currentSimulationMode={useSimulationMode}
+        onToggleSimulationMode={(val) => setUseSimulationMode(val)}
+        apiUrl={API_BASE}
+      />
+
+      {/* Execution Summary Report Modal */}
+      <ExecutionSummaryModal
+        isOpen={isSummaryModalOpen}
+        onClose={() => setIsSummaryModalOpen(false)}
+        sessionState={sessionState}
+        artifactsHistory={artifactsHistory.length > 0 ? artifactsHistory : (sessionState?.artifacts_history || [])}
+        onViewArtifacts={() => {
+          setIsSummaryModalOpen(false);
+          setActiveBottomTab("artifacts");
+        }}
       />
     </div>
   );
