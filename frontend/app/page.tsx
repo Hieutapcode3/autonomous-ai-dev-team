@@ -57,6 +57,8 @@ export default function ControlCenterPage() {
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [githubResult, setGithubResult] = useState<{ repo_url: string; commit_sha: string; repo_name: string } | null>(null);
   const isInitializingRef = useRef(false);
+  // Prevents the WS auto-reconnect logic from firing after an intentional stop
+  const stopIntentionalRef = useRef(false);
 
   // Resizable panels state
   const [bottomPanelHeight, setBottomPanelHeight] = useState<number>(270);
@@ -211,6 +213,11 @@ export default function ControlCenterPage() {
     ws.onclose = () => {
       if (!isSubscribed) return;
       setIsConnected(false);
+      // Don't auto-reconnect if the user intentionally stopped the workflow
+      if (stopIntentionalRef.current) {
+        stopIntentionalRef.current = false;
+        return;
+      }
       appendLog("WebSocket", "Session stream disconnected. Reconnecting in 2s...", "WARN");
       reconnectTimeout = setTimeout(() => {
         if (isSubscribed) {
@@ -304,6 +311,9 @@ export default function ControlCenterPage() {
               status: "stopped",
             }));
             appendLog("Orchestrator", data.message || "Workflow execution stopped by user.", "WARN");
+            // Close WebSocket cleanly — don't reconnect after an intentional stop
+            stopIntentionalRef.current = true;
+            ws.close();
             break;
 
           default:

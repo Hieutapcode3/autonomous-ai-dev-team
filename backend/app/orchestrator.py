@@ -38,10 +38,14 @@ class TeamOrchestrator:
         self._has_simulated_failure = False
         self.github_token = github_token
         self.auto_push_github = auto_push_github
-        self._stop_requested = False
+        self._stop_event = asyncio.Event()
+        self._running_task: Optional[asyncio.Task] = None
 
     def stop_execution(self) -> None:
-        self._stop_requested = True
+        """Signal the orchestrator to stop. Cancels the running asyncio task immediately."""
+        self._stop_event.set()
+        if self._running_task and not self._running_task.done():
+            self._running_task.cancel()
 
     async def _broadcast(self, event_type: str, data: Dict[str, Any]):
         if self.emit_event:
@@ -121,8 +125,28 @@ class TeamOrchestrator:
             await self._emit_log("GitHub", f"GitHub push failed: {exc}", "ERROR")
 
     async def execute_dag(self) -> Dict[str, Any]:
-        self.state.status = "running"
+        # Register this coroutine as the current task so stop_execution can cancel it.
+        self._running_task = asyncio.current_task()
         pipeline_start_time = time.time()
+        try:
+            return await self._execute_dag_inner(pipeline_start_time)
+        except asyncio.CancelledError:
+            self.state.status = "stopped"
+            self.state.total_elapsed_time_sec = round(time.time() - pipeline_start_time, 2)
+            try:
+                await self._update_fleet("IDLE", "IDLE", "IDLE")
+                await self._emit_log("Orchestrator", "Workflow forcibly cancelled by stop signal.", "WARN")
+                await self._broadcast("RUN_STOPPED", {
+                    "session_id": self.state.session_id,
+                    "status": "STOPPED",
+                    "state": self.state.model_dump(),
+                })
+            except Exception:
+                pass
+            return {"status": "STOPPED", "state": self.state.model_dump()}
+
+    async def _execute_dag_inner(self, pipeline_start_time: float) -> Dict[str, Any]:
+        self.state.status = "running"
         await self._emit_log(
             "Orchestrator",
             f"Initiating execution pipeline for session {self.state.session_id} (Est. Total Duration: ~{self.state.total_estimated_time_sec}s)..."
@@ -183,7 +207,7 @@ class TeamOrchestrator:
         max_replans = self.state.max_iterations
 
         while True:
-            if self._stop_requested:
+            if self._stop_event.is_set():
                 self.state.status = "stopped"
                 self.state.total_elapsed_time_sec = round(time.time() - pipeline_start_time, 2)
                 await self._update_fleet("IDLE", "IDLE", "IDLE")
@@ -234,7 +258,7 @@ class TeamOrchestrator:
             replan_needed = False
 
             for task in batch_tasks:
-                if self._stop_requested:
+                if self._stop_event.is_set():
                     break
 
                 # 1. Dynamic Model Routing
@@ -274,6 +298,7 @@ class TeamOrchestrator:
                     },
                     simulate_error=should_fail,
                     log_callback=self._emit_log,
+                    stop_event=self._stop_event,
                 )
 
                 if should_fail:
@@ -349,7 +374,7 @@ class TeamOrchestrator:
         superseded_ids = {t.retry_of for t in self.state.tasks.values() if t.retry_of}
         active_tasks = [t for t in self.state.tasks.values() if t.task_id not in superseded_ids]
         uncompleted = [t for t in active_tasks if t.status != TaskStatus.COMPLETED]
-        if self._stop_requested:
+        if self._stop_event.is_set():
             self.state.status = "stopped"
             self.state.total_elapsed_time_sec = round(time.time() - pipeline_start_time, 2)
             await self._update_fleet("IDLE", "IDLE", "IDLE")

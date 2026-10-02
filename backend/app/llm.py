@@ -36,6 +36,22 @@ def _parse_model_json_output(raw_text: str) -> Dict[str, Any]:
     return {"explanation": raw_text, "files": [], "code_changes": {}, "commands": []}
 
 
+# Ordered list of current Gemini models to try, newest first.
+# Update this list whenever Google releases or deprecates models.
+GEMINI_MODELS_PRIORITY = [
+    "gemini-3.8-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.5-flash",
+    "gemini-3.0-ultra-5",
+    "gemini-2.5-flash-preview-04-17",
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+    "gemini-1.5-pro-latest",
+    "gemini-1.5-flash-latest",
+]
+
+
 class LLMClient:
     def __init__(self, ollama_base_url: str = "http://localhost:11434"):
         self.anthropic_key = os.getenv("ANTHROPIC_API_KEY")
@@ -51,7 +67,12 @@ class LLMClient:
         context: Dict[str, Any],
         simulate_error: bool = False,
         log_callback: Optional[Callable[[str, str, str], Awaitable[None]]] = None,
+        stop_event: Optional[asyncio.Event] = None,
     ) -> Dict[str, Any]:
+        # Guard: check stop signal before doing any work
+        if stop_event and stop_event.is_set():
+            raise asyncio.CancelledError("Task cancelled by stop signal before execution.")
+
         # 1. Local Ollama execution (Free, local AI)
         if model in [ModelProvider.OLLAMA_QWEN, ModelProvider.OLLAMA_DEEPSEEK]:
             ollama_model_name = (
@@ -60,7 +81,7 @@ class LLMClient:
                 else "deepseek-coder:6.7b"
             )
             try:
-                return await self._call_ollama(task, ollama_model_name, context, log_callback)
+                return await self._call_ollama(task, ollama_model_name, context, log_callback, stop_event=stop_event)
             except Exception as e:
                 if log_callback:
                     await log_callback("Ollama", f"Ollama error: {str(e)} - falling back to simulation", "WARN")
@@ -85,32 +106,32 @@ class LLMClient:
                 res["output"] = f"[Claude CLI Error: {str(e)} - Fell back to simulated output]\n\n" + res["output"]
                 return res
 
-        # 3. Google Gemini CLI or Direct Gemini API execution
+        # 3. Google Gemini - always call Direct REST API first (CLI is too old)
         if model == ModelProvider.GEMINI_CLI:
             google_tok = self.google_key or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
             if google_tok:
                 try:
-                    return await self._call_gemini_api(task, context, log_callback, model_name="gemini-2.0-flash")
+                    return await self._call_gemini_api(task, context, log_callback, stop_event=stop_event)
+                except asyncio.CancelledError:
+                    raise
                 except Exception as api_err:
+                    clean_api_err = str(api_err).replace("\n", " ").strip()
                     if log_callback:
-                        await log_callback("GEMINI", f"Direct Gemini API error ({str(api_err)[:100]}). Falling back to CLI...", "WARN")
+                        await log_callback("GEMINI", f"All Gemini REST models failed ({clean_api_err[:120]}). Trying CLI fallback...", "WARN")
             try:
                 return await self._call_gemini_cli(task, context, log_callback)
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 clean_err = str(e).replace("\n", " ").strip()
-                if google_tok:
-                    try:
-                        return await self._call_gemini_api(task, context, log_callback, model_name="gemini-1.5-flash")
-                    except Exception:
-                        pass
                 try:
                     if log_callback:
-                        await log_callback("GEMINI", f"Gemini error ({clean_err}). Redirecting to Local Ollama...", "WARN")
-                    return await self._call_ollama(task, "qwen2.5-coder:7b", context, log_callback)
+                        await log_callback("GEMINI", f"Gemini CLI also failed ({clean_err[:80]}). Redirecting to Local Ollama...", "WARN")
+                    return await self._call_ollama(task, "qwen2.5-coder:7b", context, log_callback, stop_event=stop_event)
                 except Exception:
                     pass
                 if log_callback:
-                    await log_callback("GEMINI", f"Gemini error: {clean_err} - falling back to simulation", "WARN")
+                    await log_callback("GEMINI", f"All Gemini paths failed. Falling back to simulation.", "WARN")
                 res = await self._simulate_execution(task, model, context, simulate_error)
                 res["output"] = f"[Gemini Error: {clean_err} - Fell back to simulated output]\n\n" + res["output"]
                 return res
@@ -297,7 +318,7 @@ class LLMClient:
         # 4. Google Gemini API
         gemini_token = self.google_key or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
         if (model == ModelProvider.GEMINI_PRO or (gemini_token and not self.anthropic_key and not self.openai_key and not self.openrouter_key)) and gemini_token:
-            return await self._call_gemini_api(task, context, log_callback, model_name="gemini-1.5-pro")
+            return await self._call_gemini_api(task, context, log_callback, stop_event=stop_event)
 
         # Fallback simulation
         return await self._simulate_execution(task, model, context, simulate_error=False)
@@ -307,7 +328,8 @@ class LLMClient:
         task: SubTask,
         context: Dict[str, Any],
         log_callback: Optional[Callable[[str, str, str], Awaitable[None]]] = None,
-        model_name: str = "gemini-1.5-pro",
+        model_name: Optional[str] = None,
+        stop_event: Optional[asyncio.Event] = None,
     ) -> Dict[str, Any]:
         """Execute task using official Google Gemini REST API with JSON response format."""
         api_token = self.google_key or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
@@ -364,11 +386,18 @@ class LLMClient:
             f"Project Context: {json.dumps(context)}"
         )
 
-        models_to_try = [model_name, "gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"]
-        models_to_try = list(dict.fromkeys(models_to_try))
+        # Build the candidate list: if caller specified a model, try it first; then walk the priority list.
+        if model_name:
+            models_to_try = [model_name] + [m for m in GEMINI_MODELS_PRIORITY if m != model_name]
+        else:
+            models_to_try = list(GEMINI_MODELS_PRIORITY)
 
         last_error = None
         for candidate_model in models_to_try:
+            # Honour stop signal between model attempts
+            if stop_event and stop_event.is_set():
+                raise asyncio.CancelledError("Gemini API call cancelled by stop signal.")
+
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{candidate_model}:generateContent?key={api_token}"
             payload = {
                 "system_instruction": {
@@ -428,9 +457,11 @@ class LLMClient:
                         if log_callback:
                             await log_callback(
                                 "GEMINI",
-                                f"Gemini [{candidate_model}] returned HTTP {resp.status_code}. Trying next candidate...",
+                                f"Gemini [{candidate_model}] returned HTTP {resp.status_code}. Trying next model...",
                                 "WARN",
                             )
+            except asyncio.CancelledError:
+                raise
             except Exception as ex:
                 last_error = str(ex)
                 if log_callback:
@@ -444,8 +475,11 @@ class LLMClient:
         model_name: str,
         context: Dict[str, Any],
         log_callback: Optional[Callable[[str, str, str], Awaitable[None]]] = None,
+        stop_event: Optional[asyncio.Event] = None,
     ) -> Dict[str, Any]:
         """Execute task using local Ollama instance with streaming logs."""
+        if stop_event and stop_event.is_set():
+            raise asyncio.CancelledError("Ollama call cancelled by stop signal.")
         if log_callback:
             await log_callback("Ollama", f"Connected to local Ollama on {self.ollama_base_url}", "INFO")
             await log_callback("Ollama", f"Running model: [{model_name}] for subtask #{task.task_id}...", "INFO")
