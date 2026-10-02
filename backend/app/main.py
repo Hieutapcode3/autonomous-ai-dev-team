@@ -4,7 +4,9 @@ import os
 import shutil
 import httpx
 from typing import Dict, List, Optional
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query
+from pathlib import Path
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, UploadFile, File
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -23,6 +25,12 @@ from app.orchestrator import TeamOrchestrator
 
 
 app = FastAPI(title="Autonomous Multi-Agent Software Team API", version="1.0.0")
+
+# Mount uploads directory for reference media
+uploads_root = Path("uploads")
+uploads_root.mkdir(parents=True, exist_ok=True)
+(uploads_root / "references").mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=str(uploads_root.resolve())), name="uploads")
 
 app.add_middleware(
     CORSMiddleware,
@@ -92,9 +100,35 @@ async def create_session(req: CreateSessionRequest):
     state.ingested_rules = context["rules"]
     state.ingested_skills = context["skills"]
     state.context_summary = context["summary"]
+    state.reference_media = req.reference_media
     state.max_iterations = req.max_iterations
     sessions[session_id] = state
     return state
+
+
+@app.post("/api/upload-reference")
+async def upload_reference_media(file: UploadFile = File(...)):
+    uploads_dir = Path("uploads/references")
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+
+    file_ext = Path(file.filename or "file").suffix.lower()
+    unique_name = f"{uuid.uuid4().hex[:8]}_{file.filename}"
+    save_path = uploads_dir / unique_name
+
+    content = await file.read()
+    save_path.write_bytes(content)
+
+    is_video = file_ext in [".mp4", ".webm", ".mov", ".mkv", ".avi"]
+    media_type = "video" if is_video else "image"
+
+    return {
+        "name": file.filename,
+        "filename": unique_name,
+        "file_path": str(save_path.resolve()),
+        "url": f"/uploads/references/{unique_name}",
+        "media_type": media_type,
+        "size_bytes": len(content),
+    }
 
 
 @app.get("/api/context/inspect")

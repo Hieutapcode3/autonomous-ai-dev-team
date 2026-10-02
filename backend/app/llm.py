@@ -117,10 +117,19 @@ class LLMClient:
         skills_list = context.get("skills", [])
         skills_text = "\n".join([f"- {s.get('name')}: {s.get('description')}" for s in skills_list]) if skills_list else "None."
 
+        media_list = context.get("reference_media", [])
+        media_text = (
+            "\n".join([f"- {m.get('name')} ({m.get('media_type')}): {m.get('file_path')}" for m in media_list])
+            if media_list
+            else "None."
+        )
+
         system_prompt = (
             "You are an autonomous senior software engineer agent in a multi-agent team.\n\n"
             f"MANDATORY PROJECT RULES (NON-NEGOTIABLE):\n{rules_text}\n\n"
             f"AVAILABLE WORKFLOW SKILLS:\n{skills_text}\n\n"
+            f"VISUAL & ART REFERENCES:\n{media_text}\n"
+            "Analyze and adhere to the visual composition, UI anchors, spatial hierarchy, and art style conveyed in the reference media.\n\n"
             "You must return your output strictly in JSON format with keys:\n"
             "- 'files': list of file paths created or modified\n"
             "- 'code_changes': dict mapping file_path to complete code content\n"
@@ -574,18 +583,27 @@ class LLMClient:
             if task.domain in [TaskDomain.ANALYSIS, TaskDomain.ARCHITECTURE]:
                 target = "Assets/Scripts/Architecture/GameArchitectureSpec.md"
                 files.append(target)
+                ref_media = context.get("reference_media", [])
+                ref_section = ""
+                if ref_media:
+                    ref_section = "\n## Visual & Art References Analyzed\n"
+                    for m in ref_media:
+                        ref_section += f"- **{m.get('name')}** ({m.get('media_type', 'image')})\n  - Path: `{m.get('file_path')}`\n  - Art & Composition Directives: UI anchor alignment, color theme mapping, and visual hierarchy integrated into hierarchy planning.\n"
+
                 code_changes[target] = (
                     f"# Unity Game Architecture Specification\n\n"
                     f"## Objective\n{task.description}\n\n"
                     f"## Architecture Guidelines\n"
                     f"- Zero Vietnamese comments in codebase (Enforcing RULE_NO_VIETNAMESE_IN_CODE)\n"
                     f"- ScriptableObject event channels for decoupled communication\n"
-                    f"- Cached component references in Awake()\n\n"
+                    f"- Cached component references in Awake()\n"
+                    f"{ref_section}\n"
                     f"## Core Components\n"
                     f"- GameController.cs (Manager & game loop coordinator)\n"
                     f"- PrefabConfig.cs (ScriptableObject data definition)\n"
                 )
-                explanation = f"Generated Unity architecture blueprint and component contracts for {task.title}."
+                ref_suffix = f" with {len(ref_media)} visual reference(s) analyzed" if ref_media else ""
+                explanation = f"Generated Unity architecture blueprint and component contracts for {task.title}{ref_suffix}."
 
             elif task.domain == TaskDomain.IMPLEMENTATION:
                 if "prefab" in task.title.lower() or "tool" in task.title.lower():

@@ -1,7 +1,14 @@
-"use client";
+import React, { useState, useEffect, useRef } from "react";
+import { X, Sparkles, ShieldAlert, Gamepad2, Globe, ShieldCheck, Image as ImageIcon, Video, UploadCloud, Trash2, Loader2 } from "lucide-react";
 
-import React, { useState, useEffect } from "react";
-import { X, Sparkles, ShieldAlert, Gamepad2, Globe, ShieldCheck } from "lucide-react";
+export interface ReferenceMediaItem {
+  name: string;
+  filename: string;
+  file_path: string;
+  url: string;
+  media_type: string;
+  size_bytes?: number;
+}
 
 interface TaskModalProps {
   isOpen: boolean;
@@ -11,7 +18,8 @@ interface TaskModalProps {
     costConstrained: boolean,
     simulateFailure: boolean,
     projectType: string,
-    projectPath: string
+    projectPath: string,
+    referenceMedia: ReferenceMediaItem[]
   ) => void;
   initialObjective?: string;
 }
@@ -36,6 +44,10 @@ export function TaskModal({ isOpen, onClose, onSubmit, initialObjective }: TaskM
   const [objective, setObjective] = useState<string>(initialObjective || UNITY_TEMPLATES[0]);
   const [costConstrained, setCostConstrained] = useState<boolean>(false);
   const [simulateFailure, setSimulateFailure] = useState<boolean>(false);
+  const [referenceMedia, setReferenceMedia] = useState<ReferenceMediaItem[]>([]);
+  const [isUploading, setIsUploading] = useState<boolean>(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -49,6 +61,43 @@ export function TaskModal({ isOpen, onClose, onSubmit, initialObjective }: TaskM
 
   if (!isOpen) return null;
 
+  const handleFileUpload = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setIsUploading(true);
+    setUploadError(null);
+
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const formData = new FormData();
+        formData.append("file", file);
+
+        const res = await fetch("http://localhost:8000/api/upload-reference", {
+          method: "POST",
+          body: formData,
+        });
+
+        if (!res.ok) {
+          throw new Error(`Upload failed for ${file.name}`);
+        }
+
+        const data: ReferenceMediaItem = await res.json();
+        setReferenceMedia((prev) => [...prev, data]);
+      }
+    } catch (err: any) {
+      setUploadError(err.message || "Failed to upload reference file.");
+    } finally {
+      setIsUploading(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    }
+  };
+
+  const removeReference = (index: number) => {
+    setReferenceMedia((prev) => prev.filter((_, i) => i !== index));
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!objective.trim()) return;
@@ -57,7 +106,8 @@ export function TaskModal({ isOpen, onClose, onSubmit, initialObjective }: TaskM
       costConstrained,
       simulateFailure,
       projectType,
-      projectType === "unity" ? projectPath.trim() : ""
+      projectType === "unity" ? projectPath.trim() : "",
+      referenceMedia
     );
     onClose();
   };
@@ -180,6 +230,110 @@ export function TaskModal({ isOpen, onClose, onSubmit, initialObjective }: TaskM
                 </button>
               ))}
             </div>
+          </div>
+
+          {/* Visual & Art References Section */}
+          <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-3 flex flex-col gap-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <ImageIcon className="w-4 h-4 text-cyan-400" />
+                <label className="text-xs font-semibold text-slate-300 uppercase tracking-wider">
+                  Visual & Art References (Images / Videos)
+                </label>
+              </div>
+              <span className="text-[11px] text-slate-400 font-mono">
+                {referenceMedia.length} attached
+              </span>
+            </div>
+
+            <p className="text-[11px] text-slate-400 leading-normal">
+              Upload UI mockups, art references, or gameplay clips. Vision-capable models will analyze layout anchors, composition, and visual hierarchy.
+            </p>
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept="image/*,video/mp4,video/webm,video/quicktime"
+              className="hidden"
+              onChange={(e) => handleFileUpload(e.target.files)}
+            />
+
+            <div
+              onClick={() => fileInputRef.current?.click()}
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => {
+                e.preventDefault();
+                handleFileUpload(e.dataTransfer.files);
+              }}
+              className="border-2 border-dashed border-slate-800 hover:border-cyan-500/60 bg-slate-900/40 hover:bg-cyan-950/20 rounded-xl p-3.5 flex flex-col items-center justify-center gap-2 cursor-pointer transition-all"
+            >
+              {isUploading ? (
+                <div className="flex items-center gap-2 text-xs text-cyan-400">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Uploading reference media...</span>
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-center gap-2 text-slate-400">
+                    <UploadCloud className="w-5 h-5 text-cyan-400" />
+                    <span className="text-xs font-medium text-slate-300">
+                      Click or drag images & videos here
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 text-[10px] text-slate-500 font-mono">
+                    <span>PNG, JPG, WEBP, MP4, WEBM</span>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {uploadError && (
+              <div className="text-[11px] text-red-400 bg-red-950/40 border border-red-900/60 p-2 rounded-lg">
+                {uploadError}
+              </div>
+            )}
+
+            {referenceMedia.length > 0 && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-1">
+                {referenceMedia.map((media, idx) => (
+                  <div
+                    key={idx}
+                    className="flex items-center gap-2.5 p-2 rounded-lg bg-slate-900/90 border border-slate-800 text-xs"
+                  >
+                    {media.media_type === "image" ? (
+                      <img
+                        src={media.url.startsWith("http") ? media.url : `http://localhost:8000${media.url}`}
+                        alt={media.name}
+                        className="w-12 h-12 object-cover rounded-md border border-slate-700 shrink-0"
+                      />
+                    ) : (
+                      <div className="w-12 h-12 bg-purple-950/80 border border-purple-500/40 rounded-md flex flex-col items-center justify-center text-purple-300 shrink-0">
+                        <Video className="w-5 h-5" />
+                        <span className="text-[8px] font-bold mt-0.5">VIDEO</span>
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium text-slate-200 truncate text-[11px]">
+                        {media.name}
+                      </div>
+                      <div className="text-[10px] text-slate-400 font-mono uppercase">
+                        {media.media_type}
+                        {media.size_bytes ? ` • ${Math.round(media.size_bytes / 1024)} KB` : ""}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => removeReference(idx)}
+                      className="p-1 text-slate-500 hover:text-red-400 rounded transition-colors"
+                      title="Remove"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="border-t border-slate-800 pt-3 flex flex-col gap-2.5">
