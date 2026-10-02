@@ -60,6 +60,7 @@ export function SessionHistoryModal({
   const [searchQuery, setSearchQuery] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [clearingDrafts, setClearingDrafts] = useState(false);
 
   const fetchSessions = async () => {
     setIsLoading(true);
@@ -99,8 +100,6 @@ export function SessionHistoryModal({
       setDeletingId(null);
     }
   };
-
-  const [clearingDrafts, setClearingDrafts] = useState(false);
 
   const handleClearDrafts = async () => {
     if (!confirm("Clear all unexecuted / draft sessions from history?")) return;
