@@ -50,3 +50,7 @@ desktop.ini
 
 # Sandbox workspace output (runtime generated)
 workspace_sandbox/
+
+# Uploads (runtime generated)
+backend/uploads/
+uploads/

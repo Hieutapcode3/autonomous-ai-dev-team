@@ -295,7 +295,8 @@ export default function ControlCenterPage() {
     costConstrained: boolean,
     simulateFailure: boolean,
     projectType: string = "unity",
-    projectPath: string = ""
+    projectPath: string = "",
+    referenceMedia: any[] = []
   ) => {
     try {
       const res = await fetch(`${API_BASE}/api/sessions`, {
@@ -307,6 +308,7 @@ export default function ControlCenterPage() {
           project_type: projectType,
           project_path: projectPath || null,
           max_iterations: 15,
+          reference_media: referenceMedia,
         }),
       });
       if (res.ok) {
@@ -489,6 +491,7 @@ export default function ControlCenterPage() {
             projectPath={sessionState?.project_path}
             ingestedRulesCount={sessionState?.ingested_rules?.length || 0}
             ingestedSkillsCount={sessionState?.ingested_skills?.length || 0}
+            referenceMedia={sessionState?.reference_media || []}
           />
 
           <AgentFleet fleetState={fleetState} modelCounts={modelCounts} />

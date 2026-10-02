@@ -146,9 +146,21 @@ class TeamOrchestrator:
                 f"Discovered {len(self.state.ingested_skills)} Specialized Skills: {', '.join(skill_names)}",
                 "SUCCESS"
             )
+        if self.state.reference_media:
+            media_names = [f"{m.get('name', 'Media')} ({m.get('media_type', 'image')})" for m in self.state.reference_media]
+            await self._emit_log(
+                "ContextLoader",
+                f"Ingested {len(self.state.reference_media)} Visual References: {', '.join(media_names)}",
+                "SUCCESS"
+            )
+            await self._emit_log(
+                "ContextLoader",
+                "Multimodal art style, UI layout anchors, and visual composition bound to Game Architect.",
+                "INFO"
+            )
         await self._emit_log(
             "ContextLoader",
-            "Rule & Skill Ingestion Gate PASSED. All guidelines bound to Agent Fleet.",
+            "Rule, Skill & Visual Reference Ingestion Gate PASSED. All guidelines bound to Agent Fleet.",
             "SUCCESS"
         )
 
@@ -228,6 +240,7 @@ class TeamOrchestrator:
                         "project_type": self.state.project_type,
                         "rules": self.state.ingested_rules,
                         "skills": self.state.ingested_skills,
+                        "reference_media": self.state.reference_media,
                     },
                     simulate_error=should_fail,
                     log_callback=self._emit_log,

@@ -1,7 +1,5 @@
-"use client";
-
 import React from "react";
-import { Target, RotateCcw, DollarSign, Activity, CheckCircle, AlertTriangle, Clock, Timer, ShieldCheck, Gamepad2, Globe } from "lucide-react";
+import { Target, RotateCcw, DollarSign, Activity, CheckCircle, AlertTriangle, Clock, Timer, ShieldCheck, Gamepad2, Globe, Image as ImageIcon, Video, ExternalLink } from "lucide-react";
 
 interface SessionStatsProps {
   objective: string;
@@ -17,6 +15,14 @@ interface SessionStatsProps {
   projectPath?: string;
   ingestedRulesCount?: number;
   ingestedSkillsCount?: number;
+  referenceMedia?: Array<{
+    name: string;
+    filename?: string;
+    file_path?: string;
+    url: string;
+    media_type: string;
+    size_bytes?: number;
+  }>;
 }
 
 export function SessionStats({
@@ -33,6 +39,7 @@ export function SessionStats({
   projectPath,
   ingestedRulesCount = 0,
   ingestedSkillsCount = 0,
+  referenceMedia = [],
 }: SessionStatsProps) {
   const progressPercent = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
   const isUnity = projectType === "unity";
@@ -99,6 +106,50 @@ export function SessionStats({
       <div className="text-sm font-medium text-slate-200 line-clamp-2 leading-relaxed bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/60">
         {objective || "No active objective set"}
       </div>
+
+      {/* Visual Reference Previews */}
+      {referenceMedia && referenceMedia.length > 0 && (
+        <div className="bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/60 flex flex-col gap-2">
+          <div className="flex items-center justify-between text-[11px] font-semibold text-slate-300">
+            <span className="flex items-center gap-1.5 text-cyan-400">
+              <ImageIcon className="w-3.5 h-3.5" />
+              Visual Ref Inputs ({referenceMedia.length})
+            </span>
+            <span className="text-[10px] text-slate-500 font-mono">Art & Layout</span>
+          </div>
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {referenceMedia.map((m, idx) => {
+              const mediaUrl = m.url?.startsWith("http") ? m.url : `http://localhost:8000${m.url}`;
+              return (
+                <a
+                  key={idx}
+                  href={mediaUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="relative group shrink-0 rounded-lg overflow-hidden border border-slate-700/80 hover:border-cyan-400 transition-all"
+                  title={`${m.name} (${m.media_type}) - Click to preview`}
+                >
+                  {m.media_type === "image" ? (
+                    <img
+                      src={mediaUrl}
+                      alt={m.name}
+                      className="w-11 h-11 object-cover group-hover:scale-105 transition-transform"
+                    />
+                  ) : (
+                    <div className="w-11 h-11 bg-purple-950 flex flex-col items-center justify-center text-purple-300">
+                      <Video className="w-4 h-4" />
+                      <span className="text-[7px] font-bold mt-0.5">VIDEO</span>
+                    </div>
+                  )}
+                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                    <ExternalLink className="w-3 h-3 text-white" />
+                  </div>
+                </a>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-2.5">
         <div className="bg-slate-950/50 p-2.5 rounded-xl border border-slate-800/60 flex items-center justify-between">
