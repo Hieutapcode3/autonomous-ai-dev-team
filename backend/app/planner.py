@@ -1,12 +1,18 @@
 import uuid
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Optional, Any
 from collections import defaultdict, deque
 from app.schemas import SubTask, TaskDomain, TaskStatus, GlobalDAGState
 
 
 class PlannerEngine:
-    def decompose_objective(self, session_id: str, objective: str) -> GlobalDAGState:
-        # Default structured decomposition based on software engineering lifecycle
+    def decompose_objective(
+        self,
+        session_id: str,
+        objective: str,
+        project_type: str = "generic",
+        rules: Optional[List[Dict[str, Any]]] = None,
+        skills: Optional[List[Dict[str, Any]]] = None,
+    ) -> GlobalDAGState:
         tasks: Dict[str, SubTask] = {}
 
         t1_id = f"task_{uuid.uuid4().hex[:6]}"
@@ -14,54 +20,108 @@ class PlannerEngine:
         t3_id = f"task_{uuid.uuid4().hex[:6]}"
         t4_id = f"task_{uuid.uuid4().hex[:6]}"
 
-        tasks[t1_id] = SubTask(
-            task_id=t1_id,
-            title="System Architecture & Interface Blueprint",
-            description=f"Analyze requirements for: '{objective}'. Define models, API signatures, and boundary specs.",
-            domain=TaskDomain.ARCHITECTURE,
-            complexity=8,
-            dependencies=[],
-            required_tools=["fs_write"],
-        )
+        if project_type == "unity":
+            tasks[t1_id] = SubTask(
+                task_id=t1_id,
+                title="Unity Architecture & ScriptableObject Blueprint",
+                description=f"Design game systems for: '{objective}'. Define component hierarchy, event channels, and data structures. Comply with project rules.",
+                domain=TaskDomain.ARCHITECTURE,
+                complexity=8,
+                dependencies=[],
+                required_tools=["fs_write"],
+                target_files=["Assets/Scripts/Architecture/GameArchitectureSpec.md"],
+            )
 
-        tasks[t2_id] = SubTask(
-            task_id=t2_id,
-            title="Core Domain & Service Logic Implementation",
-            description="Implement business calculation engine, data structures, and main algorithmic methods.",
-            domain=TaskDomain.IMPLEMENTATION,
-            complexity=6,
-            dependencies=[t1_id],
-            required_tools=["fs_read", "fs_write", "terminal_exec"],
-            target_files=["src/service.py"],
-        )
+            tasks[t2_id] = SubTask(
+                task_id=t2_id,
+                title="Gameplay C# Logic & Component Implementation",
+                description="Write production-ready Unity C# scripts (.cs). Follow Unity lifecycle, cache references, strictly NO Vietnamese in comments.",
+                domain=TaskDomain.IMPLEMENTATION,
+                complexity=7,
+                dependencies=[t1_id],
+                required_tools=["fs_read", "fs_write"],
+                target_files=["Assets/Scripts/Gameplay/GameController.cs"],
+            )
 
-        tasks[t3_id] = SubTask(
-            task_id=t3_id,
-            title="Unit Tests & Automated Harness",
-            description="Create test fixtures, edge cases, and automated validation suite matching domain specifications.",
-            domain=TaskDomain.VERIFICATION,
-            complexity=5,
-            dependencies=[t2_id],
-            required_tools=["fs_write", "terminal_exec", "test_runner"],
-            target_files=["tests/test_service.py"],
-        )
+            tasks[t3_id] = SubTask(
+                task_id=t3_id,
+                title="Unity Scene & Prefab Tooling (MCP)",
+                description="Coordinate GameObject hierarchy, components, and prefab definitions via Unity MCP connector.",
+                domain=TaskDomain.IMPLEMENTATION,
+                complexity=6,
+                dependencies=[t2_id],
+                required_tools=["unity_mcp", "fs_write"],
+                target_files=["Assets/Scripts/Gameplay/PrefabConfig.cs"],
+            )
 
-        tasks[t4_id] = SubTask(
-            task_id=t4_id,
-            title="Deterministic Quality Gate & Build Verification",
-            description="Execute full linter, AST syntax analysis, and pytest runner across the workspace.",
-            domain=TaskDomain.VERIFICATION,
-            complexity=4,
-            dependencies=[t3_id],
-            required_tools=["terminal_exec", "test_runner"],
-        )
+            tasks[t4_id] = SubTask(
+                task_id=t4_id,
+                title="Deterministic Quality Gate & Unity Verification",
+                description="Verify C# code syntax, check rule compliance (no Vietnamese comments, clean naming), and validate editor logs.",
+                domain=TaskDomain.VERIFICATION,
+                complexity=5,
+                dependencies=[t3_id],
+                required_tools=["terminal_exec", "test_runner"],
+            )
+        else:
+            tasks[t1_id] = SubTask(
+                task_id=t1_id,
+                title="System Architecture & Interface Blueprint",
+                description=f"Analyze requirements for: '{objective}'. Define models, API signatures, and boundary specs.",
+                domain=TaskDomain.ARCHITECTURE,
+                complexity=8,
+                dependencies=[],
+                required_tools=["fs_write"],
+            )
+
+            tasks[t2_id] = SubTask(
+                task_id=t2_id,
+                title="Core Domain & Service Logic Implementation",
+                description="Implement business calculation engine, data structures, and main algorithmic methods.",
+                domain=TaskDomain.IMPLEMENTATION,
+                complexity=6,
+                dependencies=[t1_id],
+                required_tools=["fs_read", "fs_write", "terminal_exec"],
+                target_files=["src/service.py"],
+            )
+
+            tasks[t3_id] = SubTask(
+                task_id=t3_id,
+                title="Unit Tests & Automated Harness",
+                description="Create test fixtures, edge cases, and automated validation suite matching domain specifications.",
+                domain=TaskDomain.VERIFICATION,
+                complexity=5,
+                dependencies=[t2_id],
+                required_tools=["fs_write", "terminal_exec", "test_runner"],
+                target_files=["tests/test_service.py"],
+            )
+
+            tasks[t4_id] = SubTask(
+                task_id=t4_id,
+                title="Deterministic Quality Gate & Build Verification",
+                description="Execute full linter, AST syntax analysis, and test runner across the workspace.",
+                domain=TaskDomain.VERIFICATION,
+                complexity=4,
+                dependencies=[t3_id],
+                required_tools=["terminal_exec", "test_runner"],
+            )
 
         from app.router import DynamicModelRouter
         router = DynamicModelRouter()
 
         for task_id, task in tasks.items():
             task.estimated_time_sec = self.estimate_task_duration(task.domain, task.complexity)
-            task.assigned_agent = router.get_agent_for_task(task.domain)
+            if project_type == "unity":
+                agent_names = {
+                    TaskDomain.ARCHITECTURE: "Game Architect",
+                    TaskDomain.IMPLEMENTATION: "Gameplay C# Programmer",
+                    TaskDomain.VERIFICATION: "Unity QA Verifier",
+                    TaskDomain.ANALYSIS: "Game Systems Analyst",
+                    TaskDomain.UTILITY: "Unity Asset Tool Specialist",
+                }
+                task.assigned_agent = agent_names.get(task.domain, "Unity Specialist")
+            else:
+                task.assigned_agent = router.get_agent_for_task(task.domain)
             model, rationale = router.route_task(task)
             task.assigned_model = model
             task.routing_rationale = rationale
@@ -75,11 +135,14 @@ class PlannerEngine:
             tasks=tasks,
             execution_order=execution_order,
             iteration=0,
-            max_iterations=5,
+            max_iterations=15,
             total_cost_usd=0.0,
             total_estimated_time_sec=total_est,
             total_elapsed_time_sec=0.0,
             status="ready",
+            project_type=project_type,
+            ingested_rules=rules or [],
+            ingested_skills=skills or [],
         )
 
     @staticmethod

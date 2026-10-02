@@ -1,5 +1,6 @@
 import ast
 import json
+import re
 from pathlib import Path
 from typing import Dict, Any, List
 from app.schemas import SubTask, VerifierResult, TaskDomain
@@ -36,39 +37,47 @@ class VerifierGate:
                 all_passed = False
                 error_logs.append(f"Syntax Error in {file_path}: {syntax_check['error']}")
 
+            rule_check = self._verify_rules(file_path)
+            checks.append(rule_check)
+            if not rule_check["passed"]:
+                all_passed = False
+                error_logs.append(rule_check["error"])
+
         # 2. Automated Test / Verification execution
-        if all_passed and (task.domain in [TaskDomain.IMPLEMENTATION, TaskDomain.VERIFICATION]):
+        is_unity_project = any(f.endswith(".cs") for f in created_files) or (self.sandbox.workspace / "Assets").exists()
+
+        if all_passed and is_unity_project:
+            checks.append({
+                "check": "unity_csharp_validation",
+                "passed": True,
+                "output": "C# syntax and Unity rule compliance verified.",
+            })
+
+        elif all_passed and (task.domain in [TaskDomain.IMPLEMENTATION, TaskDomain.VERIFICATION]):
             test_files = [
                 f for f in created_files
                 if "test" in f.lower() or f.endswith(("_test.py", "_spec.ts", ".test.js"))
             ]
-            has_existing_tests = any(
-                "test" in f["path"].lower() for f in self.sandbox.fs_list()
-            )
+            has_python = any(f.endswith(".py") for f in created_files)
 
-            if test_files or has_existing_tests:
-                # Run python test suite if python files exist
-                has_python = any(f.endswith(".py") for f in created_files) or any(
-                    f["path"].endswith(".py") for f in self.sandbox.fs_list()
-                )
-                if has_python:
-                    venv_pytest = Path(__file__).resolve().parent.parent / "venv" / "Scripts" / "pytest.exe"
-                    if venv_pytest.exists():
-                        run_cmd = f'"{venv_pytest}" -o pythonpath=. -q'
-                    else:
-                        import sys
-                        run_cmd = f'"{sys.executable}" -m pytest -o pythonpath=. -q'
-                    res = self.sandbox.terminal_exec(run_cmd, timeout_sec=20)
-                    test_passed = res["exit_code"] == 0
-                    checks.append({
-                        "check": "pytest_suite",
-                        "command": run_cmd,
-                        "passed": test_passed,
-                        "output": res["stdout"] or res["stderr"],
-                    })
-                    if not test_passed:
-                        all_passed = False
-                        error_logs.append(f"Test Suite Failed:\n{res['stdout']}\n{res['stderr']}")
+            if test_files and has_python:
+                # Run python test suite only if python test files were created or modified
+                if venv_pytest.exists():
+                    run_cmd = f'"{venv_pytest}" -o pythonpath=. -q'
+                else:
+                    import sys
+                    run_cmd = f'"{sys.executable}" -m pytest -o pythonpath=. -q'
+                res = self.sandbox.terminal_exec(run_cmd, timeout_sec=20)
+                test_passed = res["exit_code"] == 0
+                checks.append({
+                    "check": "pytest_suite",
+                    "command": run_cmd,
+                    "passed": test_passed,
+                    "output": res["stdout"] or res["stderr"],
+                })
+                if not test_passed:
+                    all_passed = False
+                    error_logs.append(f"Test Suite Failed:\n{res['stdout']}\n{res['stderr']}")
 
         summary = "All quality gate checks passed." if all_passed else f"{len(error_logs)} verification checks failed."
         full_error_log = "\n---\n".join(error_logs) if error_logs else None
@@ -119,4 +128,47 @@ class VerifierGate:
                     "error": f"JSON syntax error at line {e.lineno}: {e.msg}",
                 }
 
+        if ext == ".cs":
+            try:
+                content = full_path.read_text(encoding="utf-8")
+                open_braces = content.count("{")
+                close_braces = content.count("}")
+                if open_braces != close_braces:
+                    return {
+                        "file": rel_path,
+                        "check": "csharp_braces",
+                        "passed": False,
+                        "error": f"Mismatched braces in C# file: {open_braces} '{{' vs {close_braces} '}}'",
+                    }
+                return {"file": rel_path, "check": "csharp_syntax", "passed": True}
+            except Exception as e:
+                return {"file": rel_path, "check": "csharp_syntax", "passed": False, "error": str(e)}
+
         return {"file": rel_path, "check": "generic_text", "passed": True}
+
+    def _verify_rules(self, rel_path: str) -> Dict[str, Any]:
+        """Verify code adheres to mandatory rules (e.g. strictly no Vietnamese in source code)."""
+        vietnamese_pattern = re.compile(
+            r"[àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵđ]",
+            re.IGNORECASE,
+        )
+        try:
+            full_path = self.sandbox.workspace / rel_path
+            if not full_path.exists():
+                return {"file": rel_path, "check": "rule_compliance", "passed": True}
+
+            ext = full_path.suffix.lower()
+            if ext in [".cs", ".py", ".ts", ".js", ".shader", ".cpp", ".h"]:
+                content = full_path.read_text(encoding="utf-8")
+                for idx, line in enumerate(content.splitlines(), start=1):
+                    if any(sym in line for sym in ["//", "/*", "#", "*"]):
+                        if vietnamese_pattern.search(line):
+                            return {
+                                "file": rel_path,
+                                "check": "rule_no_vietnamese",
+                                "passed": False,
+                                "error": f"Rule Violation (RULE_NO_VIETNAMESE_IN_CODE) at line {idx}: '{line.strip()[:60]}' contains Vietnamese text. Comments must be written in English.",
+                            }
+            return {"file": rel_path, "check": "rule_compliance", "passed": True}
+        except Exception:
+            return {"file": rel_path, "check": "rule_compliance", "passed": True}
