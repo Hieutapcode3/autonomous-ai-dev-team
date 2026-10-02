@@ -185,6 +185,7 @@ class TeamOrchestrator:
             if not uncompleted:
                 self.state.status = "completed"
                 self.state.total_elapsed_time_sec = round(time.time() - pipeline_start_time, 2)
+                self.state.artifacts_history = list(self.sandbox.artifacts_history)
                 await self._update_fleet("IDLE", "IDLE", "IDLE")
                 await self._emit_log(
                     "Orchestrator",
@@ -195,8 +196,12 @@ class TeamOrchestrator:
                 # Auto-push to GitHub if configured
                 await self._try_push_github()
 
-                await self._broadcast("RUN_FINISHED", {"status": "SUCCESS", "state": self.state.model_dump()})
-                return {"status": "SUCCESS", "state": self.state.model_dump()}
+                await self._broadcast("RUN_FINISHED", {
+                    "status": "SUCCESS",
+                    "state": self.state.model_dump(),
+                    "artifacts_history": self.sandbox.artifacts_history,
+                })
+                return {"status": "SUCCESS", "state": self.state.model_dump(), "artifacts_history": self.sandbox.artifacts_history}
 
             # Find pending tasks whose dependencies have completed or failed (with replan)
             ready_tasks = [
@@ -264,6 +269,7 @@ class TeamOrchestrator:
                 for filepath, code_body in code_changes.items():
                     res = self.sandbox.fs_write(filepath, code_body)
                     await self._emit_log("Sandbox", f"Wrote file {filepath} ({res['size_bytes']} bytes). Unified diff generated.")
+                self.state.artifacts_history = list(self.sandbox.artifacts_history)
 
                 # Calculate cost and latency
                 in_tok = exec_result.get("input_tokens", 1000)

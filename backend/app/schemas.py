@@ -78,6 +78,7 @@ class GlobalDAGState(BaseModel):
     reference_media: List[Dict[str, Any]] = Field(default_factory=list)
     demo_html: Optional[Dict[str, Any]] = None
     use_simulation: bool = True
+    artifacts_history: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class VerifierResult(BaseModel):
