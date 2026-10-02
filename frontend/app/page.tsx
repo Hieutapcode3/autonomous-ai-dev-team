@@ -37,6 +37,7 @@ const WS_BASE = process.env.NEXT_PUBLIC_WS_URL || "ws://127.0.0.1:8000";
 export default function ControlCenterPage() {
   const [sessionId, setSessionId] = useState<string>("");
   const [sessionState, setSessionState] = useState<any>(null);
+  const [useSimulationMode, setUseSimulationMode] = useState<boolean>(true);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [activeBottomTab, setActiveBottomTab] = useState<"logs" | "artifacts" | "verifier">("logs");
   const [isTaskModalOpen, setIsTaskModalOpen] = useState<boolean>(false);
@@ -288,12 +289,19 @@ export default function ControlCenterPage() {
   const handleRunWorkflow = async (simulateFailure: boolean = false) => {
     if (!sessionId) return;
     try {
-      appendLog("Orchestrator", `Triggering execution run (Simulate Failure: ${simulateFailure})...`);
+      appendLog(
+        "Orchestrator",
+        `Triggering execution run [Engine: ${useSimulationMode ? "FAST SIMULATION" : "REAL MULTI-AGENT LLM"}, Simulate Failure: ${simulateFailure}]...`
+      );
       let activeSid = sessionId;
       let res = await fetch(`${API_BASE}/api/sessions/${activeSid}/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ simulate_failure: simulateFailure, cost_constrained: false }),
+        body: JSON.stringify({
+          simulate_failure: simulateFailure,
+          cost_constrained: false,
+          use_simulation: useSimulationMode,
+        }),
       });
 
       // If backend restarted or session expired, auto-recreate and rerun
@@ -308,6 +316,7 @@ export default function ControlCenterPage() {
             project_type: sessionState?.project_type || "unity",
             project_path: sessionState?.project_path || "d:\\Unity\\Project\\ls004-block-home",
             max_iterations: 15,
+            use_simulation: useSimulationMode,
           }),
         });
         if (createRes.ok) {
@@ -318,7 +327,11 @@ export default function ControlCenterPage() {
           res = await fetch(`${API_BASE}/api/sessions/${activeSid}/run`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ simulate_failure: simulateFailure, cost_constrained: false }),
+            body: JSON.stringify({
+              simulate_failure: simulateFailure,
+              cost_constrained: false,
+              use_simulation: useSimulationMode,
+            }),
           });
         }
       }
@@ -341,8 +354,10 @@ export default function ControlCenterPage() {
     simulateFailure: boolean,
     projectType: string = "unity",
     projectPath: string = "",
-    referenceMedia: any[] = []
+    referenceMedia: any[] = [],
+    useSimulation: boolean = true
   ) => {
+    setUseSimulationMode(useSimulation);
     try {
       const res = await fetch(`${API_BASE}/api/sessions`, {
         method: "POST",
@@ -354,6 +369,7 @@ export default function ControlCenterPage() {
           project_path: projectPath || null,
           max_iterations: 15,
           reference_media: referenceMedia,
+          use_simulation: useSimulation,
         }),
       });
       if (res.ok) {
@@ -365,7 +381,10 @@ export default function ControlCenterPage() {
           `Phase 0 Ingested: ${data.ingested_rules?.length || 0} Rules, ${data.ingested_skills?.length || 0} Skills for ${data.project_type?.toUpperCase()} [${data.project_path || "Sandbox"}]`,
           "SUCCESS"
         );
-        appendLog("Planner", `Created session #${data.session_id} with ${Object.keys(data.tasks || {}).length} subtasks.`);
+        appendLog(
+          "Planner",
+          `Created session #${data.session_id} with ${Object.keys(data.tasks || {}).length} subtasks [Engine: ${useSimulation ? "⚡ Simulation" : "🤖 Real LLM"}].`
+        );
 
         // If user wanted immediate run with simulation
         if (simulateFailure) {
@@ -445,6 +464,19 @@ export default function ControlCenterPage() {
               {isConnected ? "WS Connected" : "Connecting..."}
             </span>
           </div>
+
+          <button
+            onClick={() => setUseSimulationMode(!useSimulationMode)}
+            title="Toggle between Fast Simulation Mode (mock sleep ~3s) and Real Multi-Agent LLM Mode (2-10 min)"
+            className={`px-2.5 py-1.5 rounded-xl text-[11px] font-mono font-bold border transition-all flex items-center gap-1.5 ${
+              useSimulationMode
+                ? "bg-amber-950/40 text-amber-300 border-amber-500/40 hover:bg-amber-900/40"
+                : "bg-emerald-950/40 text-emerald-300 border-emerald-500/40 hover:bg-emerald-900/40"
+            }`}
+          >
+            <span className={`w-2 h-2 rounded-full ${useSimulationMode ? "bg-amber-400" : "bg-emerald-400 animate-pulse"}`} />
+            {useSimulationMode ? "⚡ SIMULATION (~3s)" : "🤖 REAL MULTI-AGENT"}
+          </button>
 
           <button
             onClick={() => setIsTaskModalOpen(true)}

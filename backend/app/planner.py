@@ -64,47 +64,131 @@ class PlannerEngine:
                 required_tools=["terminal_exec", "test_runner"],
             )
         else:
-            tasks[t1_id] = SubTask(
-                task_id=t1_id,
-                title="System Architecture & Interface Blueprint",
-                description=f"Analyze requirements for: '{objective}'. Define models, API signatures, and boundary specs.",
-                domain=TaskDomain.ARCHITECTURE,
-                complexity=8,
-                dependencies=[],
-                required_tools=["fs_write"],
-            )
+            obj_lower = objective.lower()
+            is_game_proto = any(k in obj_lower for k in ["html", "canvas", "game", "playable", "three.js", "prototype", "2d", "3d", "arcade", "puzzle"])
+            is_web_app = any(k in obj_lower for k in ["react", "next", "vue", "frontend", "ui", "web app", "dashboard", "tailwind"])
 
-            tasks[t2_id] = SubTask(
-                task_id=t2_id,
-                title="Core Domain & Service Logic Implementation",
-                description="Implement business calculation engine, data structures, and main algorithmic methods.",
-                domain=TaskDomain.IMPLEMENTATION,
-                complexity=6,
-                dependencies=[t1_id],
-                required_tools=["fs_read", "fs_write", "terminal_exec"],
-                target_files=["src/service.py"],
-            )
-
-            tasks[t3_id] = SubTask(
-                task_id=t3_id,
-                title="Unit Tests & Automated Harness",
-                description="Create test fixtures, edge cases, and automated validation suite matching domain specifications.",
-                domain=TaskDomain.VERIFICATION,
-                complexity=5,
-                dependencies=[t2_id],
-                required_tools=["fs_write", "terminal_exec", "test_runner"],
-                target_files=["tests/test_service.py"],
-            )
-
-            tasks[t4_id] = SubTask(
-                task_id=t4_id,
-                title="Deterministic Quality Gate & Build Verification",
-                description="Execute full linter, AST syntax analysis, and test runner across the workspace.",
-                domain=TaskDomain.VERIFICATION,
-                complexity=4,
-                dependencies=[t3_id],
-                required_tools=["terminal_exec", "test_runner"],
-            )
+            if is_game_proto:
+                tasks[t1_id] = SubTask(
+                    task_id=t1_id,
+                    title="Playable Game Architecture & Tech Stack Selection",
+                    description=f"Analyze mechanics for '{objective}'. Select rendering context (Canvas 2D vs Three.js/WebGL), establish entity state machine and loop contracts.",
+                    domain=TaskDomain.ARCHITECTURE,
+                    complexity=8,
+                    dependencies=[],
+                    required_tools=["fs_write"],
+                    target_files=["GameArchitectureSpec.md"],
+                )
+                tasks[t2_id] = SubTask(
+                    task_id=t2_id,
+                    title="Playable Game Engine & Core Mechanics Implementation",
+                    description="Implement single-file HTML5/JS game loop (requestAnimationFrame), player input controller, scoring formulas, and entity physics.",
+                    domain=TaskDomain.IMPLEMENTATION,
+                    complexity=7,
+                    dependencies=[t1_id],
+                    required_tools=["fs_read", "fs_write", "terminal_exec"],
+                    target_files=["index.html"],
+                )
+                tasks[t3_id] = SubTask(
+                    task_id=t3_id,
+                    title="Juice, Visual Polish & Web Audio Synthesizer",
+                    description="Integrate particle systems, screen shake, floating combo text popups, and Web Audio API synthesizer for zero-asset audio.",
+                    domain=TaskDomain.IMPLEMENTATION,
+                    complexity=6,
+                    dependencies=[t2_id],
+                    required_tools=["fs_read", "fs_write"],
+                    target_files=["index.html"],
+                )
+                tasks[t4_id] = SubTask(
+                    task_id=t4_id,
+                    title="Deterministic Playability & Quality Gate Verification",
+                    description="Verify HTML structure, check JavaScript execution without syntax errors, validate zero external dependencies, and confirm responsive touch/mouse inputs.",
+                    domain=TaskDomain.VERIFICATION,
+                    complexity=5,
+                    dependencies=[t3_id],
+                    required_tools=["terminal_exec", "test_runner"],
+                    target_files=["index.html"],
+                )
+            elif is_web_app:
+                tasks[t1_id] = SubTask(
+                    task_id=t1_id,
+                    title="Web Application Architecture & Framework Blueprint",
+                    description=f"Analyze requirements for '{objective}'. Select framework (Next.js/React/Vite), design component hierarchy, state flow, and styling tokens.",
+                    domain=TaskDomain.ARCHITECTURE,
+                    complexity=8,
+                    dependencies=[],
+                    required_tools=["fs_write"],
+                    target_files=["ArchitectureSpec.md"],
+                )
+                tasks[t2_id] = SubTask(
+                    task_id=t2_id,
+                    title="UI Components & Responsive Layout Construction",
+                    description="Build UI components with modern aesthetics, accessible forms, state hooks, and client-side validation.",
+                    domain=TaskDomain.IMPLEMENTATION,
+                    complexity=7,
+                    dependencies=[t1_id],
+                    required_tools=["fs_read", "fs_write", "terminal_exec"],
+                    target_files=["src/App.tsx", "package.json"],
+                )
+                tasks[t3_id] = SubTask(
+                    task_id=t3_id,
+                    title="Business Logic & State Management Integration",
+                    description="Implement business handlers, API communications, caching, and reactive data store.",
+                    domain=TaskDomain.IMPLEMENTATION,
+                    complexity=6,
+                    dependencies=[t2_id],
+                    required_tools=["fs_read", "fs_write"],
+                    target_files=["src/store.ts"],
+                )
+                tasks[t4_id] = SubTask(
+                    task_id=t4_id,
+                    title="Automated Quality Gate & Build Verification",
+                    description="Execute TypeScript type checks, bundle compilation, and automated test suite.",
+                    domain=TaskDomain.VERIFICATION,
+                    complexity=5,
+                    dependencies=[t3_id],
+                    required_tools=["terminal_exec", "test_runner"],
+                )
+            else:
+                tasks[t1_id] = SubTask(
+                    task_id=t1_id,
+                    title="System Architecture & Technology Selection",
+                    description=f"Analyze requirements for: '{objective}'. Determine optimal tech stack, interface contracts, and module boundaries.",
+                    domain=TaskDomain.ARCHITECTURE,
+                    complexity=8,
+                    dependencies=[],
+                    required_tools=["fs_write"],
+                    target_files=["ArchitectureSpec.md"],
+                )
+                tasks[t2_id] = SubTask(
+                    task_id=t2_id,
+                    title="Core Domain & Service Logic Implementation",
+                    description="Implement business calculation engine, data structures, and main algorithmic methods.",
+                    domain=TaskDomain.IMPLEMENTATION,
+                    complexity=7,
+                    dependencies=[t1_id],
+                    required_tools=["fs_read", "fs_write", "terminal_exec"],
+                    target_files=["src/service.py"],
+                )
+                tasks[t3_id] = SubTask(
+                    task_id=t3_id,
+                    title="Unit Tests & Automated Test Harness",
+                    description="Create test fixtures, edge cases, and automated validation suite matching domain specifications.",
+                    domain=TaskDomain.VERIFICATION,
+                    complexity=5,
+                    dependencies=[t2_id],
+                    required_tools=["fs_write", "terminal_exec", "test_runner"],
+                    target_files=["tests/test_service.py"],
+                )
+                tasks[t4_id] = SubTask(
+                    task_id=t4_id,
+                    title="Deterministic Quality Gate & Build Verification",
+                    description="Execute full linter, syntax analysis, and test runner across the workspace.",
+                    domain=TaskDomain.VERIFICATION,
+                    complexity=4,
+                    dependencies=[t3_id],
+                    required_tools=["terminal_exec", "test_runner"],
+                )
 
         from app.router import DynamicModelRouter
         router = DynamicModelRouter()
@@ -120,6 +204,20 @@ class PlannerEngine:
                     TaskDomain.UTILITY: "Unity Asset Tool Specialist",
                 }
                 task.assigned_agent = agent_names.get(task.domain, "Unity Specialist")
+            elif any(k in objective.lower() for k in ["html", "canvas", "game", "playable", "three.js", "prototype"]):
+                agent_names = {
+                    TaskDomain.ARCHITECTURE: "Creative Game Architect",
+                    TaskDomain.IMPLEMENTATION: "Senior Game Developer",
+                    TaskDomain.VERIFICATION: "Game QA Verifier",
+                }
+                task.assigned_agent = agent_names.get(task.domain, "Game Engineer")
+            elif any(k in objective.lower() for k in ["react", "next", "vue", "frontend", "ui", "web app"]):
+                agent_names = {
+                    TaskDomain.ARCHITECTURE: "Full-Stack Architect",
+                    TaskDomain.IMPLEMENTATION: "Frontend Engineer",
+                    TaskDomain.VERIFICATION: "Web QA Specialist",
+                }
+                task.assigned_agent = agent_names.get(task.domain, "Web Developer")
             else:
                 task.assigned_agent = router.get_agent_for_task(task.domain)
             model, rationale = router.route_task(task)

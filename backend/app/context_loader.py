@@ -78,6 +78,15 @@ class ProjectContextLoader:
         if (p / "package.json").exists():
             return "javascript"
 
+        if (p / "go.mod").exists():
+            return "go"
+
+        if (p / "Cargo.toml").exists():
+            return "rust"
+
+        if any(p.glob("*.html")):
+            return "web"
+
         return "generic"
 
     @classmethod
