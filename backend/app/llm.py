@@ -51,6 +51,22 @@ GEMINI_MODELS_PRIORITY = [
     "gemini-1.5-flash-latest",
 ]
 
+NON_DESTRUCTIVE_RULES = (
+    "=== MANDATORY PRE-EXECUTION NECESSITY (YAGNI) & NON-DESTRUCTIVE EDITING RULES ===\n"
+    "1. NECESSITY CHECK (YAGNI):\n"
+    "   Before touching ANY file, ask: 'Is modifying this existing file strictly necessary to achieve the objective?'\n"
+    "   'Can this feature be created as a NEW standalone script/component instead?'\n"
+    "   PREFER creating NEW files over modifying existing working scripts.\n\n"
+    "2. STRICT PROHIBITION ON DELETING OR TRUNCATING EXISTING CODE:\n"
+    "   - You are STRICTLY FORBIDDEN from deleting, removing, renaming, or commenting out ANY existing methods, properties, fields, or logic.\n"
+    "   - Never omit code with placeholders like '// ... existing code ...'.\n"
+    "   - NEVER delete public methods (like ReloadCurrentLevel, LoadNextLevel, ContainsCell, etc.) that other scripts in the project depend on.\n"
+    "   - If modifying an existing file: PRESERVE ALL ORIGINAL CODE intact. You may ONLY append new methods or surgically insert minimal hooks.\n\n"
+    "3. MINIMAL SURGICAL EDITS:\n"
+    "   - Do NOT rewrite a 500+ line file from scratch if you only need to add 1 method.\n"
+    "   - Do NOT refactor, reformat, or reorganize existing working code.\n"
+)
+
 
 class LLMClient:
     def __init__(self, ollama_base_url: str = "http://localhost:11434"):
@@ -364,6 +380,7 @@ class LLMClient:
 
         system_instruction = (
             "You are an autonomous senior software engineer and game developer agent in a multi-agent team.\n"
+            f"{NON_DESTRUCTIVE_RULES}\n"
             "CRITICAL MANDATORY INSTRUCTION: You MUST generate actual, concrete code changes.\n"
             "You must return your output strictly in JSON format with keys:\n"
             "- 'files': list of relative file paths created or modified (e.g. ['Assets/BlockHome/Scripts/CoreScript/GamePlay/_Human/HumanActor.cs'])\n"
@@ -386,6 +403,14 @@ class LLMClient:
                 parts.append(f"### {path}\n```\n{content}\n```")
             existing_files_text = "\n\n".join(parts)
 
+        orig_backups = context.get("original_pre_edit_contents", {})
+        orig_text = ""
+        if orig_backups:
+            parts = []
+            for path, content in orig_backups.items():
+                parts.append(f"### ORIGINAL UNMODIFIED {path} (RESTORE MISSING METHODS FROM THIS):\n```\n{content[:4000]}\n```")
+            orig_text = f"\n\nORIGINAL CODE BEFORE TASK (CRITICAL REFERENCE — PRESERVE ALL ITS METHODS):\n" + "\n\n".join(parts)
+
         prior_outputs = context.get("prior_task_outputs", {})
         prior_outputs_text = "None."
         if prior_outputs:
@@ -402,7 +427,9 @@ class LLMClient:
             f"Domain: {task.domain.value}\n"
             f"Target Files: {target_files_hint}\n"
             f"Complexity Level: {task.complexity}/10\n\n"
-            f"EXISTING FILE CONTENTS (read these carefully — modify them, do NOT rewrite from scratch):\n{existing_files_text}\n\n"
+            f"{NON_DESTRUCTIVE_RULES}\n\n"
+            f"EXISTING FILE CONTENTS (read these carefully — modify them, do NOT rewrite from scratch):\n{existing_files_text}\n"
+            f"{orig_text}\n\n"
             f"PRIOR TASK OUTPUTS IN THIS SESSION (already written by earlier tasks — do not duplicate):\n{prior_outputs_text}\n"
         )
 
@@ -506,6 +533,7 @@ class LLMClient:
 
         system_prompt = (
             "You are an autonomous senior software engineer and game developer agent in a multi-agent team.\n"
+            f"{NON_DESTRUCTIVE_RULES}\n"
             "CRITICAL MANDATORY INSTRUCTION: You MUST generate actual, concrete code changes.\n"
             "You must return your output strictly in JSON format with keys:\n"
             "- 'files': list of relative file paths created or modified (e.g. ['Assets/BlockHome/Scripts/CoreScript/GamePlay/_Human/HumanActor.cs'])\n"
@@ -527,6 +555,14 @@ class LLMClient:
                 parts.append(f"### {path}\n```\n{content}\n```")
             existing_files_text = "\n\n".join(parts)
 
+        orig_backups = context.get("original_pre_edit_contents", {})
+        orig_text = ""
+        if orig_backups:
+            parts = []
+            for path, content in orig_backups.items():
+                parts.append(f"### ORIGINAL UNMODIFIED {path} (RESTORE MISSING METHODS FROM THIS):\n```\n{content[:4000]}\n```")
+            orig_text = f"\n\nORIGINAL CODE BEFORE TASK (CRITICAL REFERENCE — PRESERVE ALL ITS METHODS):\n" + "\n\n".join(parts)
+
         prior_outputs = context.get("prior_task_outputs", {})
         prior_outputs_text = "None."
         if prior_outputs:
@@ -543,8 +579,10 @@ class LLMClient:
             f"Description: {task.description}\n"
             f"Domain: {task.domain.value}\n"
             f"Target Files: {target_files_hint}\n\n"
+            f"{NON_DESTRUCTIVE_RULES}\n\n"
             f"Project Guidelines:\n{rules_str}\n\n"
-            f"EXISTING FILE CONTENTS (read carefully — modify them, do NOT rewrite from scratch):\n{existing_files_text}\n\n"
+            f"EXISTING FILE CONTENTS (read carefully — modify them, do NOT rewrite from scratch):\n{existing_files_text}\n"
+            f"{orig_text}\n\n"
             f"PRIOR TASK OUTPUTS IN THIS SESSION (already written — do not duplicate):\n{prior_outputs_text}\n\n"
             "Please output JSON with 'files' and 'code_changes' containing the concrete code."
         )
@@ -747,13 +785,44 @@ class LLMClient:
                 )
             raise RuntimeError("Gemini CLI ('gemini') executable not found. Install via 'pip install gemini-cli'")
 
+        existing_files = context.get("existing_file_contents", {})
+        existing_files_text = "None."
+        if existing_files:
+            parts = []
+            for path, content in existing_files.items():
+                parts.append(f"### {path}\n```\n{content[:4000]}\n```")
+            existing_files_text = "\n\n".join(parts)
+
+        orig_backups = context.get("original_pre_edit_contents", {})
+        orig_text = ""
+        if orig_backups:
+            parts = []
+            for path, content in orig_backups.items():
+                parts.append(f"### ORIGINAL UNMODIFIED {path} (RESTORE MISSING METHODS FROM THIS):\n```\n{content[:4000]}\n```")
+            orig_text = f"\n\nORIGINAL CODE BEFORE TASK (CRITICAL REFERENCE — PRESERVE ALL ITS METHODS):\n" + "\n\n".join(parts)
+
+        prior_outputs = context.get("prior_task_outputs", {})
+        prior_outputs_text = "None."
+        if prior_outputs:
+            parts = []
+            for path, content in prior_outputs.items():
+                parts.append(f"### {path}\n```\n{content[:2000]}\n```")
+            prior_outputs_text = "\n\n".join(parts)
+
         prompt = (
             f"You are an autonomous senior software engineer. Output strictly valid JSON with keys: "
-            f"'files', 'code_changes', 'explanation', 'commands'.\n"
+            f"'files', 'code_changes', 'explanation', 'commands'.\n\n"
+            f"{NON_DESTRUCTIVE_RULES}\n\n"
+            f"Overall Objective: {context.get('objective', '')}\n"
+            f"Project Directory: {context.get('project_path', 'Sandbox')}\n"
             f"Subtask: {task.title}\n"
             f"Description: {task.description}\n"
             f"Domain: {task.domain.value}\n"
-            f"Context: {json.dumps(context)}"
+            f"Target Files: {', '.join(task.target_files) if task.target_files else 'None'}\n\n"
+            f"EXISTING FILE CONTENTS:\n{existing_files_text}\n"
+            f"{orig_text}\n\n"
+            f"PRIOR TASK OUTPUTS:\n{prior_outputs_text}\n\n"
+            f"Output strictly valid JSON with keys: 'files', 'code_changes', 'explanation', 'commands'."
         )
 
         api_token = self.google_key or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")

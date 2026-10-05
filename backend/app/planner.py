@@ -1,3 +1,4 @@
+import re
 import uuid
 from typing import Dict, List, Set, Optional, Any
 from collections import defaultdict, deque
@@ -42,29 +43,41 @@ class PlannerEngine:
             # Match files specifically mentioned in the objective
             objective_matched = self._match_scripts(scripts, obj_words) if scripts else []
 
-            # Fallback well-known categories if no specific matches
-            arch_files = objective_matched or self._match_scripts(
-                scripts,
-                ["manager", "controller", "system", "data", "scriptable", "config"],
-            ) or ["Assets/Scripts/Architecture/GameArchitectureSpec.md"]
+            # Determine whether this is a new feature/tool/editor or modification of an existing script
+            is_new_tool_or_feature = any(
+                kw in objective.lower()
+                for kw in ["tạo", "create", "thêm", "add", "editor", "level editor", "system", "tool", "ui", "new"]
+            )
 
-            impl_files = objective_matched or self._match_scripts(
-                scripts,
-                ["actor", "player", "human", "enemy", "character", "gameplay", "logic", "bone", "sofa", "block", "move", "physics"],
-            ) or ["Assets/Scripts/Gameplay/GameController.cs"]
+            # Determine base scripts directory
+            base_script_dir = "Assets/Scripts"
+            if scripts:
+                # Find common parent folder of existing scripts (e.g. Assets/BlockHome/Scripts)
+                first_script = scripts[0].replace("\\", "/")
+                parts = first_script.split("/")
+                if len(parts) >= 3:
+                    base_script_dir = "/".join(parts[:parts.index("Scripts") + 1]) if "Scripts" in parts else "/".join(parts[:-1])
 
-            scene_files = self._match_scripts(
-                scripts,
-                ["prefab", "scene", "spawn", "level", "editor", "ui", "canvas"],
-            ) or ["Assets/Scripts/Gameplay/PrefabConfig.cs"]
+            # For new features/tools (e.g. level editor), create dedicated NEW files to avoid breaking existing core managers
+            if is_new_tool_or_feature and not objective_matched:
+                feature_name = "LevelEditor" if any(w in objective.lower() for w in ["level", "editor", "map"]) else "FeatureController"
+                impl_files = [f"{base_script_dir}/{feature_name}/{feature_name}.cs"]
+                scene_files = [f"{base_script_dir}/{feature_name}/{feature_name}Config.cs"]
+            else:
+                impl_files = objective_matched or [f"{base_script_dir}/Gameplay/NewFeatureController.cs"]
+                scene_files = [f"{base_script_dir}/Gameplay/NewFeatureConfig.cs"]
+
+            arch_files = [f"{base_script_dir}/Architecture/ArchitectureSpec.md"]
 
             tasks[t1_id] = SubTask(
                 task_id=t1_id,
                 title="Unity Architecture & ScriptableObject Blueprint",
                 description=(
-                    f"Design game systems for the following objective: '{objective}'. "
-                    "Define component hierarchy, event channels, and data structures. "
-                    "Comply with all project rules. Output a concise spec document."
+                    f"Design game systems for the following objective: '{objective}'.\n"
+                    "PRE-CHECK (YAGNI & NON-DESTRUCTIVE):\n"
+                    "- Evaluate if modifying existing files is strictly necessary. Prefer creating NEW modular components.\n"
+                    "- NEVER rewrite existing core game managers.\n"
+                    "- Output a concise architecture and data structure spec document."
                 ),
                 domain=TaskDomain.ARCHITECTURE,
                 complexity=8,
@@ -77,10 +90,12 @@ class PlannerEngine:
                 task_id=t2_id,
                 title="Gameplay C# Logic & Component Implementation",
                 description=(
-                    f"Implement the following objective in Unity C# scripts: '{objective}'. "
-                    "Follow Unity lifecycle (Awake/Start/Update), cache GetComponent references, "
-                    "strictly NO Vietnamese in comments. Modify only the listed target files "
-                    "and preserve all existing code that is unrelated to the objective."
+                    f"Implement the following objective in Unity C# scripts: '{objective}'.\n"
+                    "MANDATORY NON-DESTRUCTIVE RULES:\n"
+                    "1. PRE-CHECK: Before modifying any existing script, verify if you can implement the feature in a new script instead.\n"
+                    "2. ZERO DELETIONS: You are STRICTLY FORBIDDEN from deleting, removing, or renaming ANY existing methods, properties, or fields in existing files.\n"
+                    "3. If modifying an existing file: PRESERVE ALL ORIGINAL CODE (like ReloadCurrentLevel, LoadNextLevel, ContainsCell, etc.). Only APPEND new methods or hooks.\n"
+                    "4. Follow Unity lifecycle (Awake/Start/Update), cache GetComponent references, strictly NO Vietnamese in comments."
                 ),
                 domain=TaskDomain.IMPLEMENTATION,
                 complexity=7,
@@ -93,8 +108,8 @@ class PlannerEngine:
                 task_id=t3_id,
                 title="Unity Scene & Prefab Tooling (MCP)",
                 description=(
-                    f"Coordinate GameObject hierarchy, components, and prefab definitions for: '{objective}'. "
-                    "Use Unity MCP connector to set up scenes. Do not duplicate work from the implementation task."
+                    f"Coordinate GameObject hierarchy, components, and prefab definitions for: '{objective}'.\n"
+                    "NON-DESTRUCTIVE: Do not delete existing scene components or existing prefabs. Only attach or create new references."
                 ),
                 domain=TaskDomain.IMPLEMENTATION,
                 complexity=6,
@@ -356,22 +371,34 @@ class PlannerEngine:
 
         error_trace = failed_task.error_trace or "Verification gate rejection — no error detail."
 
-        # Build a structured description so the fix agent knows exactly what to address
+        # Compute retry depth to avoid title explosion like "[FIX] [FIX] [FIX]..."
+        clean_title = re.sub(r"^(\[FIX(?:\s*#\d+)?\]\s*)+", "", failed_task.title).strip()
+        depth = 1
+        curr = failed_task
+        while curr.retry_of and curr.retry_of in state.tasks:
+            depth += 1
+            curr = state.tasks[curr.retry_of]
+        replan_title = f"[FIX #{depth}] {clean_title}"
+
+        # Extract any source files mentioned in the compiler error trace (e.g. Assets\...\LevelLoader.cs)
+        discovered_error_files = re.findall(r"(?:Assets|assets)[\\/][^\s\(\):;,]+\.cs", error_trace)
+        normalized_error_files = [f.replace("\\", "/") for f in discovered_error_files]
+        all_targets = list(dict.fromkeys((failed_task.target_files or []) + normalized_error_files))
+
         fix_description = (
-            f"CRITICAL FIX REQUIRED for task: '{failed_task.title}'\n\n"
-            f"The previous implementation was rejected by the Quality Gate. "
-            f"You MUST fix ALL errors below and rewrite the affected files completely.\n\n"
+            f"CRITICAL FIX REQUIRED: Fix compiler / quality gate errors for: '{clean_title}'.\n\n"
+            f"MANDATORY NON-DESTRUCTIVE FIX RULES:\n"
+            f"1. MINIMAL SURGICAL FIXES ONLY: Do NOT rewrite entire unrelated systems. Fix ONLY the compile errors.\n"
+            f"2. RESTORE MISSING METHODS: If errors mention missing methods (e.g. 'ReloadCurrentLevel', 'LoadNextLevel'), you MUST restore or declare them. NEVER delete methods that other scripts depend on.\n"
+            f"3. STRICT SIGNATURE CHECK: Fix type mismatches (e.g. Vector2 vs Vector2Int) and method argument counts.\n"
+            f"4. PRESERVE 100% OF EXISTING WORKING CODE: Keep all other methods, fields, and classes intact.\n\n"
             f"=== ERROR TRACE ===\n{error_trace}\n===================\n\n"
-            f"Instructions:\n"
-            f"- Read each error message carefully and fix the root cause in the C# code.\n"
-            f"- Do NOT just remove the failing line — understand why it fails and implement the correct solution.\n"
-            f"- Output the COMPLETE fixed file contents (not just diffs) in code_changes.\n"
-            f"- Target files that must be fixed: {', '.join(failed_task.target_files) if failed_task.target_files else 'same as failed task'}."
+            f"Target files that must be fixed: {', '.join(all_targets) if all_targets else 'same as failed task'}."
         )
 
         fix_task = SubTask(
             task_id=replan_id,
-            title=f"[FIX] {failed_task.title}",
+            title=replan_title,
             description=fix_description,
             domain=failed_task.domain,
             complexity=min(10, failed_task.complexity + 1),
@@ -379,7 +406,7 @@ class PlannerEngine:
             required_tools=failed_task.required_tools,
             status=TaskStatus.PENDING,
             retry_of=failed_task.task_id,
-            target_files=failed_task.target_files,
+            target_files=all_targets,
             estimated_time_sec=self.estimate_task_duration(failed_task.domain, min(10, failed_task.complexity + 1)),
         )
 

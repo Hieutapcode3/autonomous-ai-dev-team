@@ -41,6 +41,7 @@ class TeamOrchestrator:
         self.auto_push_github = auto_push_github
         self._stop_event = asyncio.Event()
         self._running_task: Optional[asyncio.Task] = None
+        self._file_backups: Dict[str, str] = {}
 
     def stop_execution(self) -> None:
         """Signal the orchestrator to stop. Cancels the running asyncio task immediately."""
@@ -327,6 +328,13 @@ class TeamOrchestrator:
                         "INFO",
                     )
 
+                # Prepare pre-edit backup references for context
+                orig_refs = {
+                    f: self._file_backups[f]
+                    for f in self._file_backups
+                    if (task.target_files and f in task.target_files) or f in existing_files
+                }
+
                 exec_result = await self.llm.execute_task(
                     task=task,
                     model=allocated_model,
@@ -340,6 +348,7 @@ class TeamOrchestrator:
                         "demo_html": self.state.demo_html,
                         "existing_file_contents": existing_files,
                         "prior_task_outputs": prior_outputs,
+                        "original_pre_edit_contents": orig_refs,
                     },
                     simulate_error=should_fail,
                     log_callback=self._emit_log,
@@ -349,8 +358,20 @@ class TeamOrchestrator:
                 if should_fail:
                     self._has_simulated_failure = True
 
-                # Apply file writes to sandbox
+                # Backup original files before writing changes
                 code_changes = exec_result.get("code_changes", {})
+                if self.state.project_path:
+                    base_proj = Path(self.state.project_path)
+                    for filepath in code_changes.keys():
+                        if filepath not in self._file_backups:
+                            disk_f = base_proj / filepath
+                            if disk_f.exists() and disk_f.is_file():
+                                try:
+                                    self._file_backups[filepath] = disk_f.read_text(encoding="utf-8", errors="replace")
+                                except Exception:
+                                    pass
+
+                # Apply file writes to sandbox
                 for filepath, code_body in code_changes.items():
                     res = self.sandbox.fs_write(filepath, code_body)
                     await self._emit_log("Sandbox", f"Wrote file {filepath} ({res['size_bytes']} bytes). Unified diff generated.")
@@ -406,11 +427,34 @@ class TeamOrchestrator:
                     )
                     await self._broadcast("TASK_FAILED", task.model_dump())
 
+                    # Check retry depth to prevent infinite loops (Circuit Breaker max 3 retries)
+                    depth = 1
+                    curr = task
+                    while curr.retry_of and curr.retry_of in self.state.tasks:
+                        depth += 1
+                        curr = self.state.tasks[curr.retry_of]
+
+                    if depth >= 3:
+                        await self._emit_log(
+                            "CircuitBreaker",
+                            f"Circuit Breaker: Task #{task.task_id} failed verification {depth} times consecutively. Halting replanning to protect codebase from corruption.",
+                            "ERROR",
+                        )
+                        # Automatic Rollback to pristine state
+                        if self._file_backups:
+                            for fpath, orig_code in self._file_backups.items():
+                                try:
+                                    self.sandbox.fs_write(fpath, orig_code)
+                                    await self._emit_log("Rollback", f"Rolled back {fpath} to pristine pre-run state.", "WARN")
+                                except Exception as e:
+                                    await self._emit_log("Rollback", f"Failed rollback for {fpath}: {e}", "ERROR")
+                        break
+
                     # 4. Trigger Adaptive Replanning with full compile error context
                     await self._update_fleet("REPLANNING", "IDLE", "IDLE")
                     await self._emit_log(
                         "Replanner",
-                        f"Triggering Adaptive Replanning — injecting fix node for #{task.task_id} with compile error context...",
+                        f"Triggering Adaptive Replanning (attempt {depth + 1}/3) — injecting fix node with compiler error context...",
                     )
                     fix_task = self.planner.trigger_replan(self.state, task)
                     await self._broadcast("REPLAN_TRIGGERED", {
