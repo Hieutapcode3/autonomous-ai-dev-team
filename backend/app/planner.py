@@ -5,6 +5,18 @@ from app.schemas import SubTask, TaskDomain, TaskStatus, GlobalDAGState
 
 
 class PlannerEngine:
+    @staticmethod
+    def _match_scripts(discovered_scripts: List[str], *keyword_groups: List[str]) -> List[str]:
+        """Return script paths from discovered_scripts matching any keyword group."""
+        results: List[str] = []
+        for script in discovered_scripts:
+            lower = script.lower()
+            for group in keyword_groups:
+                if any(kw.lower() in lower for kw in group):
+                    results.append(script)
+                    break
+        return results[:4]  # cap at 4 files per task to keep prompts focused
+
     def decompose_objective(
         self,
         session_id: str,
@@ -12,6 +24,7 @@ class PlannerEngine:
         project_type: str = "generic",
         rules: Optional[List[Dict[str, Any]]] = None,
         skills: Optional[List[Dict[str, Any]]] = None,
+        discovered_scripts: Optional[List[str]] = None,
     ) -> GlobalDAGState:
         tasks: Dict[str, SubTask] = {}
 
@@ -21,43 +34,82 @@ class PlannerEngine:
         t4_id = f"task_{uuid.uuid4().hex[:6]}"
 
         if project_type == "unity":
+            scripts = discovered_scripts or []
+
+            # Extract keywords from the objective for file matching
+            obj_words = objective.lower().split()
+
+            # Match files specifically mentioned in the objective
+            objective_matched = self._match_scripts(scripts, obj_words) if scripts else []
+
+            # Fallback well-known categories if no specific matches
+            arch_files = objective_matched or self._match_scripts(
+                scripts,
+                ["manager", "controller", "system", "data", "scriptable", "config"],
+            ) or ["Assets/Scripts/Architecture/GameArchitectureSpec.md"]
+
+            impl_files = objective_matched or self._match_scripts(
+                scripts,
+                ["actor", "player", "human", "enemy", "character", "gameplay", "logic", "bone", "sofa", "block", "move", "physics"],
+            ) or ["Assets/Scripts/Gameplay/GameController.cs"]
+
+            scene_files = self._match_scripts(
+                scripts,
+                ["prefab", "scene", "spawn", "level", "editor", "ui", "canvas"],
+            ) or ["Assets/Scripts/Gameplay/PrefabConfig.cs"]
+
             tasks[t1_id] = SubTask(
                 task_id=t1_id,
                 title="Unity Architecture & ScriptableObject Blueprint",
-                description=f"Design game systems for: '{objective}'. Define component hierarchy, event channels, and data structures. Comply with project rules.",
+                description=(
+                    f"Design game systems for the following objective: '{objective}'. "
+                    "Define component hierarchy, event channels, and data structures. "
+                    "Comply with all project rules. Output a concise spec document."
+                ),
                 domain=TaskDomain.ARCHITECTURE,
                 complexity=8,
                 dependencies=[],
                 required_tools=["fs_write"],
-                target_files=["Assets/Scripts/Architecture/GameArchitectureSpec.md"],
+                target_files=arch_files,
             )
 
             tasks[t2_id] = SubTask(
                 task_id=t2_id,
                 title="Gameplay C# Logic & Component Implementation",
-                description="Write production-ready Unity C# scripts (.cs). Follow Unity lifecycle, cache references, strictly NO Vietnamese in comments.",
+                description=(
+                    f"Implement the following objective in Unity C# scripts: '{objective}'. "
+                    "Follow Unity lifecycle (Awake/Start/Update), cache GetComponent references, "
+                    "strictly NO Vietnamese in comments. Modify only the listed target files "
+                    "and preserve all existing code that is unrelated to the objective."
+                ),
                 domain=TaskDomain.IMPLEMENTATION,
                 complexity=7,
                 dependencies=[t1_id],
                 required_tools=["fs_read", "fs_write"],
-                target_files=["Assets/Scripts/Gameplay/GameController.cs"],
+                target_files=impl_files,
             )
 
             tasks[t3_id] = SubTask(
                 task_id=t3_id,
                 title="Unity Scene & Prefab Tooling (MCP)",
-                description="Coordinate GameObject hierarchy, components, and prefab definitions via Unity MCP connector.",
+                description=(
+                    f"Coordinate GameObject hierarchy, components, and prefab definitions for: '{objective}'. "
+                    "Use Unity MCP connector to set up scenes. Do not duplicate work from the implementation task."
+                ),
                 domain=TaskDomain.IMPLEMENTATION,
                 complexity=6,
                 dependencies=[t2_id],
                 required_tools=["unity_mcp", "fs_write"],
-                target_files=["Assets/Scripts/Gameplay/PrefabConfig.cs"],
+                target_files=scene_files,
             )
 
             tasks[t4_id] = SubTask(
                 task_id=t4_id,
                 title="Deterministic Quality Gate & Unity Verification",
-                description="Verify C# code syntax, check rule compliance (no Vietnamese comments, clean naming), and validate editor logs.",
+                description=(
+                    "Verify C# code syntax, check rule compliance (no Vietnamese comments, clean naming), "
+                    "and validate Unity editor console logs. Trigger refresh and fix any compile errors."
+                ),
                 domain=TaskDomain.VERIFICATION,
                 complexity=5,
                 dependencies=[t3_id],

@@ -377,13 +377,33 @@ class LLMClient:
         )
 
         target_files_hint = ", ".join(task.target_files) if task.target_files else "determine based on objective"
+
+        existing_files = context.get("existing_file_contents", {})
+        existing_files_text = "None."
+        if existing_files:
+            parts = []
+            for path, content in existing_files.items():
+                parts.append(f"### {path}\n```\n{content}\n```")
+            existing_files_text = "\n\n".join(parts)
+
+        prior_outputs = context.get("prior_task_outputs", {})
+        prior_outputs_text = "None."
+        if prior_outputs:
+            parts = []
+            for path, content in prior_outputs.items():
+                parts.append(f"### {path}\n```\n{content[:3000]}\n```")
+            prior_outputs_text = "\n\n".join(parts)
+
         user_content = (
+            f"Overall Objective: {context.get('objective', '')}\n"
+            f"Project Directory: {context.get('project_path', 'Sandbox')}\n"
             f"Subtask: {task.title}\n"
             f"Description: {task.description}\n"
             f"Domain: {task.domain.value}\n"
             f"Target Files: {target_files_hint}\n"
-            f"Complexity Level: {task.complexity}/10\n"
-            f"Project Context: {json.dumps(context)}"
+            f"Complexity Level: {task.complexity}/10\n\n"
+            f"EXISTING FILE CONTENTS (read these carefully — modify them, do NOT rewrite from scratch):\n{existing_files_text}\n\n"
+            f"PRIOR TASK OUTPUTS IN THIS SESSION (already written by earlier tasks — do not duplicate):\n{prior_outputs_text}\n"
         )
 
         # Build the candidate list: if caller specified a model, try it first; then walk the priority list.
@@ -499,6 +519,22 @@ class LLMClient:
         target_files_hint = ", ".join(task.target_files) if task.target_files else "determine based on objective"
         rules_str = "\n".join([f"- {r.get('title')}: {r.get('content')}" for r in context.get("rules", [])[:4]])
 
+        existing_files = context.get("existing_file_contents", {})
+        existing_files_text = "None."
+        if existing_files:
+            parts = []
+            for path, content in existing_files.items():
+                parts.append(f"### {path}\n```\n{content}\n```")
+            existing_files_text = "\n\n".join(parts)
+
+        prior_outputs = context.get("prior_task_outputs", {})
+        prior_outputs_text = "None."
+        if prior_outputs:
+            parts = []
+            for path, content in prior_outputs.items():
+                parts.append(f"### {path}\n```\n{content[:3000]}\n```")
+            prior_outputs_text = "\n\n".join(parts)
+
         user_prompt = (
             f"Overall Objective: {context.get('objective', '')}\n"
             f"Project Directory: {context.get('project_path', 'Sandbox')}\n"
@@ -508,6 +544,8 @@ class LLMClient:
             f"Domain: {task.domain.value}\n"
             f"Target Files: {target_files_hint}\n\n"
             f"Project Guidelines:\n{rules_str}\n\n"
+            f"EXISTING FILE CONTENTS (read carefully — modify them, do NOT rewrite from scratch):\n{existing_files_text}\n\n"
+            f"PRIOR TASK OUTPUTS IN THIS SESSION (already written — do not duplicate):\n{prior_outputs_text}\n\n"
             "Please output JSON with 'files' and 'code_changes' containing the concrete code."
         )
 

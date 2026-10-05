@@ -1,5 +1,6 @@
 import asyncio
 import time
+from pathlib import Path
 from typing import Callable, Awaitable, Optional, Dict, Any
 from app.schemas import GlobalDAGState, SubTask, TaskStatus, WebSocketEvent, ModelProvider
 from app.router import DynamicModelRouter
@@ -46,6 +47,23 @@ class TeamOrchestrator:
         self._stop_event.set()
         if self._running_task and not self._running_task.done():
             self._running_task.cancel()
+
+    def _read_project_files(self, task: SubTask) -> Dict[str, str]:
+        """Read current on-disk content of the task's target files."""
+        project_path = self.state.project_path
+        if not project_path or not task.target_files:
+            return {}
+        base = Path(project_path)
+        contents: Dict[str, str] = {}
+        for rel in task.target_files:
+            abs_path = base / rel
+            if abs_path.exists() and abs_path.is_file():
+                try:
+                    # Limit to 8 KB per file to keep prompt size manageable
+                    contents[rel] = abs_path.read_text(encoding="utf-8", errors="replace")[:8000]
+                except Exception:
+                    pass
+        return contents
 
     async def _broadcast(self, event_type: str, data: Dict[str, Any]):
         if self.emit_event:
@@ -284,6 +302,31 @@ class TeamOrchestrator:
                 start_time = time.time()
                 should_fail = self.simulate_failure_once and not self._has_simulated_failure and task.domain.value == "implementation"
 
+                # Read current on-disk content so agents don't overwrite existing work
+                existing_files = self._read_project_files(task)
+                if existing_files:
+                    await self._emit_log(
+                        "ContextLoader",
+                        f"Loaded {len(existing_files)} existing file(s) for #{task.task_id}: {', '.join(existing_files.keys())}",
+                        "INFO",
+                    )
+
+                # Collect outputs written by all prior tasks in this session
+                prior_outputs: Dict[str, str] = {}
+                for artifact in self.sandbox.artifacts_history:
+                    fpath = artifact.get("file", "")
+                    if fpath and fpath not in existing_files:
+                        try:
+                            prior_outputs[fpath] = self.sandbox.fs_read(fpath)
+                        except Exception:
+                            pass
+                if prior_outputs:
+                    await self._emit_log(
+                        "ContextLoader",
+                        f"Injecting {len(prior_outputs)} prior-task artifact(s) into context for #{task.task_id}.",
+                        "INFO",
+                    )
+
                 exec_result = await self.llm.execute_task(
                     task=task,
                     model=allocated_model,
@@ -295,6 +338,8 @@ class TeamOrchestrator:
                         "skills": self.state.ingested_skills,
                         "reference_media": self.state.reference_media,
                         "demo_html": self.state.demo_html,
+                        "existing_file_contents": existing_files,
+                        "prior_task_outputs": prior_outputs,
                     },
                     simulate_error=should_fail,
                     log_callback=self._emit_log,
