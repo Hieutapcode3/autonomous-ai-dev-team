@@ -90,8 +90,8 @@ class ProjectContextLoader:
         return "generic"
 
     @classmethod
-    def discover_rules(cls, project_path: Optional[str], project_type: str) -> List[Dict[str, Any]]:
-        """Collect all active rules from global configs and project-specific files."""
+    def discover_rules(cls, project_path: Optional[str], project_type: str, objective: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Collect all active rules from global configs, project-specific files, and user-referenced specs."""
         rules: List[Dict[str, Any]] = list(cls.MANDATORY_GLOBAL_RULES)
 
         if project_type == "unity":
@@ -112,39 +112,51 @@ class ProjectContextLoader:
                 except Exception:
                     pass
 
-        # 2. Project-level root rules
+        # 2. Project-level specs, documentation, and user-referenced guides
         if project_path:
             p = Path(project_path).resolve()
             if p.exists() and p.is_dir():
-                standard_filenames = [
-                    "AGENTS.md", "CLAUDE.md", "GEMINI.md", ".cursorrules", "RULES.md"
-                ]
-                for fname in standard_filenames:
-                    rf = p / fname
-                    if rf.exists() and rf.is_file():
-                        try:
-                            content = rf.read_text(encoding="utf-8")
-                            rules.append({
-                                "id": f"project_{fname}",
-                                "title": f"Project Guideline: {fname}",
-                                "content": content.strip()[:2000],
-                                "source": str(rf),
-                            })
-                        except Exception:
-                            pass
+                # Extract any *.md files mentioned in user's objective (e.g. 'level-editor.md')
+                mentioned_md_files = []
+                if objective:
+                    mentioned_md_files = re.findall(r"[\w\.-]+\.md", objective, re.IGNORECASE)
 
-                # Scan .agents/rules/
-                proj_rules_dir = p / ".agents" / "rules"
-                if proj_rules_dir.exists() and proj_rules_dir.is_dir():
-                    for rf in proj_rules_dir.glob("*.md"):
+                ignore_folders = {".git", ".pytest_cache", "Library", "Temp", "PackageCache", "obj", "Build", "Builds"}
+                seen_sources = set()
+
+                # Recursively search for all relevant markdown files in project
+                for md_file in p.rglob("*.md"):
+                    if any(ignored in md_file.parts for ignored in ignore_folders):
+                        continue
+
+                    rel_path = str(md_file.relative_to(p)).replace("\\", "/")
+                    fname = md_file.name
+                    fname_lower = fname.lower()
+
+                    is_explicitly_mentioned = any(fname_lower == m.lower() for m in mentioned_md_files)
+                    is_spec_or_rule = (
+                        is_explicitly_mentioned
+                        or fname in ["AGENTS.md", "CLAUDE.md", "GEMINI.md", ".cursorrules", "RULES.md"]
+                        or any(kw in fname_lower for kw in ["editor", "spec", "architecture", "design", "guide", "manual", "rule"])
+                    )
+
+                    if is_spec_or_rule and rel_path not in seen_sources:
+                        seen_sources.add(rel_path)
                         try:
-                            content = rf.read_text(encoding="utf-8")
-                            rules.append({
-                                "id": f"project_rule_{rf.stem}",
-                                "title": f"Project Rule: {rf.stem}",
-                                "content": content.strip()[:2000],
-                                "source": str(rf),
-                            })
+                            content = md_file.read_text(encoding="utf-8", errors="replace")
+                            # If explicitly mentioned in objective, give generous capacity and top priority
+                            max_len = 8000 if is_explicitly_mentioned else 2500
+                            rule_entry = {
+                                "id": f"project_{md_file.stem}",
+                                "title": f"{'⭐ PRIMARY SPECIFICATION GUIDE' if is_explicitly_mentioned else 'Project Guideline'}: {rel_path}",
+                                "content": content.strip()[:max_len],
+                                "source": rel_path,
+                                "is_primary_spec": is_explicitly_mentioned,
+                            }
+                            if is_explicitly_mentioned:
+                                rules.insert(0, rule_entry)  # Place at the very top of rules!
+                            else:
+                                rules.append(rule_entry)
                         except Exception:
                             pass
 
@@ -200,13 +212,43 @@ class ProjectContextLoader:
                         except Exception:
                             pass
 
+        # 4. Project-level markdown skills with YAML frontmatter (e.g. Assets/BlockHome/level-editor.md)
+        if project_path:
+            p = Path(project_path).resolve()
+            if p.exists() and p.is_dir():
+                ignore_folders = {".git", ".pytest_cache", "Library", "Temp", "PackageCache"}
+                for md_file in p.rglob("*.md"):
+                    if any(ignored in md_file.parts for ignored in ignore_folders):
+                        continue
+                    try:
+                        first_bytes = md_file.read_text(encoding="utf-8", errors="replace")[:600]
+                        if first_bytes.startswith("---"):
+                            full_text = md_file.read_text(encoding="utf-8", errors="replace")
+                            meta, body = cls._parse_frontmatter(full_text)
+                            name = meta.get("name")
+                            if name and name not in seen_names:
+                                seen_names.add(name)
+                                skills.append({
+                                    "name": name,
+                                    "description": meta.get("description", "Custom Project Skill"),
+                                    "instructions": body[:3000],
+                                    "path": str(md_file),
+                                })
+                    except Exception:
+                        pass
+
         return skills
 
     @classmethod
-    def ingest(cls, project_path: Optional[str] = None, user_project_type: Optional[str] = None) -> Dict[str, Any]:
+    def ingest(
+        cls,
+        project_path: Optional[str] = None,
+        user_project_type: Optional[str] = None,
+        objective: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Perform Phase 0 context ingestion and return consolidated context package."""
         resolved_type = user_project_type if user_project_type and user_project_type != "generic" else cls.detect_project_type(project_path)
-        rules = cls.discover_rules(project_path, resolved_type)
+        rules = cls.discover_rules(project_path, resolved_type, objective=objective)
         skills = cls.discover_skills(project_path)
 
         discovered_scripts: List[str] = []

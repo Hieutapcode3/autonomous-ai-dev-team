@@ -49,33 +49,64 @@ class PlannerEngine:
                 for kw in ["tạo", "create", "thêm", "add", "editor", "level editor", "system", "tool", "ui", "new"]
             )
 
+            # Check if any rule is an explicitly mentioned primary specification (e.g. level-editor.md)
+            primary_spec = next((r for r in (rules or []) if r.get("is_primary_spec")), None)
+            spec_guide_text = ""
+            if primary_spec:
+                spec_guide_text = (
+                    f"\n\n=== PRIMARY USER SPECIFICATION ({primary_spec.get('source', '')}) ===\n"
+                    f"You MUST align your implementation strictly with this specification:\n"
+                    f"{primary_spec.get('content')[:3500]}\n"
+                    f"==========================================================\n"
+                )
+
+            # Determine whether this is a level editor or Unity Editor tooling
+            is_editor_tool = any(
+                kw in objective.lower()
+                for kw in ["editor", "level editor", "editor window", "tool cho gd", "authoring", "board editor", "map editor"]
+            )
+
             # Determine base scripts directory
             base_script_dir = "Assets/Scripts"
             if scripts:
-                # Find common parent folder of existing scripts (e.g. Assets/BlockHome/Scripts)
                 first_script = scripts[0].replace("\\", "/")
                 parts = first_script.split("/")
                 if len(parts) >= 3:
                     base_script_dir = "/".join(parts[:parts.index("Scripts") + 1]) if "Scripts" in parts else "/".join(parts[:-1])
 
-            # For new features/tools (e.g. level editor), create dedicated NEW files to avoid breaking existing core managers
-            if is_new_tool_or_feature and not objective_matched:
-                feature_name = "LevelEditor" if any(w in objective.lower() for w in ["level", "editor", "map"]) else "FeatureController"
+            if is_editor_tool:
+                # Unity Editor tools MUST reside in an Editor folder to access UnityEditor API and avoid runtime build failures
+                feature_name = "LevelEditor" if any(w in objective.lower() for w in ["level", "map", "board", "stage"]) else "CustomEditor"
+                root_module_dir = base_script_dir.rsplit("/Scripts", 1)[0] if "/Scripts" in base_script_dir else base_script_dir
+                editor_dir = f"{root_module_dir}/Editor/{feature_name}"
+
+                arch_files = [f"{editor_dir}/ArchitectureSpec.md"]
+                impl_files = [
+                    f"{editor_dir}/{feature_name}Window.cs",
+                    f"{editor_dir}/{feature_name}Data.cs",
+                ]
+                scene_files = [
+                    f"{editor_dir}/{feature_name}Window.uxml",
+                    f"{editor_dir}/{feature_name}Window.uss",
+                ]
+            elif is_new_tool_or_feature and not objective_matched:
+                feature_name = "FeatureController"
                 impl_files = [f"{base_script_dir}/{feature_name}/{feature_name}.cs"]
                 scene_files = [f"{base_script_dir}/{feature_name}/{feature_name}Config.cs"]
+                arch_files = [f"{base_script_dir}/Architecture/ArchitectureSpec.md"]
             else:
                 impl_files = objective_matched or [f"{base_script_dir}/Gameplay/NewFeatureController.cs"]
                 scene_files = [f"{base_script_dir}/Gameplay/NewFeatureConfig.cs"]
-
-            arch_files = [f"{base_script_dir}/Architecture/ArchitectureSpec.md"]
+                arch_files = [f"{base_script_dir}/Architecture/ArchitectureSpec.md"]
 
             tasks[t1_id] = SubTask(
                 task_id=t1_id,
                 title="Unity Architecture & ScriptableObject Blueprint",
                 description=(
                     f"Design game systems for the following objective: '{objective}'.\n"
+                    f"{spec_guide_text}\n"
                     "PRE-CHECK (YAGNI & NON-DESTRUCTIVE):\n"
-                    "- Evaluate if modifying existing files is strictly necessary. Prefer creating NEW modular components.\n"
+                    "- Evaluate if modifying existing files is strictly necessary. Prefer creating NEW modular components in dedicated folders.\n"
                     "- NEVER rewrite existing core game managers.\n"
                     "- Output a concise architecture and data structure spec document."
                 ),
@@ -91,11 +122,13 @@ class PlannerEngine:
                 title="Gameplay C# Logic & Component Implementation",
                 description=(
                     f"Implement the following objective in Unity C# scripts: '{objective}'.\n"
+                    f"{spec_guide_text}\n"
                     "MANDATORY NON-DESTRUCTIVE RULES:\n"
                     "1. PRE-CHECK: Before modifying any existing script, verify if you can implement the feature in a new script instead.\n"
                     "2. ZERO DELETIONS: You are STRICTLY FORBIDDEN from deleting, removing, or renaming ANY existing methods, properties, or fields in existing files.\n"
-                    "3. If modifying an existing file: PRESERVE ALL ORIGINAL CODE (like ReloadCurrentLevel, LoadNextLevel, ContainsCell, etc.). Only APPEND new methods or hooks.\n"
-                    "4. Follow Unity lifecycle (Awake/Start/Update), cache GetComponent references, strictly NO Vietnamese in comments."
+                    "3. If modifying an existing file: PRESERVE ALL ORIGINAL CODE intact. Only APPEND new methods or hooks.\n"
+                    "4. For Editor tools, place all code in Editor/ folder and strictly follow UI Toolkit conventions.\n"
+                    "5. Strictly NO Vietnamese in comments. Clean English code."
                 ),
                 domain=TaskDomain.IMPLEMENTATION,
                 complexity=7,
@@ -106,10 +139,11 @@ class PlannerEngine:
 
             tasks[t3_id] = SubTask(
                 task_id=t3_id,
-                title="Unity Scene & Prefab Tooling (MCP)",
+                title="Unity UI Toolkit & Tooling (UXML/USS/MCP)",
                 description=(
-                    f"Coordinate GameObject hierarchy, components, and prefab definitions for: '{objective}'.\n"
-                    "NON-DESTRUCTIVE: Do not delete existing scene components or existing prefabs. Only attach or create new references."
+                    f"Implement the visual interface, UXML layout, USS styles, and editor tooling for: '{objective}'.\n"
+                    f"{spec_guide_text}\n"
+                    "NON-DESTRUCTIVE: Do not delete existing assets or scene components. Only generate new UI Toolkit assets or tool configurations."
                 ),
                 domain=TaskDomain.IMPLEMENTATION,
                 complexity=6,

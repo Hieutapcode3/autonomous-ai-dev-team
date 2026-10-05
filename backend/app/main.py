@@ -115,7 +115,7 @@ async def create_session(req: CreateSessionRequest):
         except Exception:
             pass
 
-    context = ProjectContextLoader.ingest(project_path, project_type)
+    context = ProjectContextLoader.ingest(project_path, project_type, objective=req.objective)
     state = planner_engine.decompose_objective(
         session_id=session_id,
         objective=req.objective,
