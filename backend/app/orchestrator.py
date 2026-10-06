@@ -1,7 +1,7 @@
 import asyncio
 import time
 from pathlib import Path
-from typing import Callable, Awaitable, Optional, Dict, Any
+from typing import Callable, Awaitable, Optional, Dict, Any, Set
 from app.schemas import GlobalDAGState, SubTask, TaskStatus, WebSocketEvent, ModelProvider
 from app.router import DynamicModelRouter
 from app.sandbox import SandboxRuntime
@@ -9,6 +9,7 @@ from app.verifier import VerifierGate
 from app.planner import PlannerEngine
 from app.llm import LLMClient
 from app.github_service import GitHubService
+from app import unity_verifier
 
 
 EventCallback = Callable[[WebSocketEvent], Awaitable[None]]
@@ -42,12 +43,50 @@ class TeamOrchestrator:
         self._stop_event = asyncio.Event()
         self._running_task: Optional[asyncio.Task] = None
         self._file_backups: Dict[str, str] = {}
+        self._created_files: Set[str] = set()
 
     def stop_execution(self) -> None:
         """Signal the orchestrator to stop. Cancels the running asyncio task immediately."""
         self._stop_event.set()
         if self._running_task and not self._running_task.done():
             self._running_task.cancel()
+
+    async def _rollback_changes(self):
+        """Roll back all modified files and remove newly created broken files to keep Unity clean."""
+        project_path = self.state.project_path
+        base = Path(project_path) if project_path else None
+
+        # 1. Remove newly created files on disk that caused compile errors
+        if base and self._created_files:
+            for rel in list(self._created_files):
+                try:
+                    f = base / rel
+                    if f.exists() and f.is_file():
+                        f.unlink()
+                        meta = base / f"{rel}.meta"
+                        if meta.exists():
+                            meta.unlink()
+                        await self._emit_log("Rollback", f"Cleaned up broken generated file: {rel}", "WARN")
+                except Exception as e:
+                    await self._emit_log("Rollback", f"Could not remove {rel}: {e}", "WARN")
+            self._created_files.clear()
+
+        # 2. Restore modified files to pristine pre-run state
+        if self._file_backups:
+            for fpath, orig_code in self._file_backups.items():
+                try:
+                    self.sandbox.fs_write(fpath, orig_code)
+                    await self._emit_log("Rollback", f"Restored {fpath} to pristine pre-run state.", "WARN")
+                except Exception as e:
+                    await self._emit_log("Rollback", f"Failed rollback for {fpath}: {e}", "ERROR")
+
+        # 3. Trigger Unity refresh so red console errors disappear immediately
+        if self.state.project_type == "unity":
+            try:
+                await unity_verifier.refresh_and_wait()
+                await self._emit_log("Rollback", "Triggered Unity Editor refresh to clear compile errors.", "INFO")
+            except Exception:
+                pass
 
     def _read_project_files(self, task: SubTask) -> Dict[str, str]:
         """Read current on-disk content of the task's target files plus contextual sibling files."""
@@ -175,8 +214,9 @@ class TeamOrchestrator:
             self.state.status = "stopped"
             self.state.total_elapsed_time_sec = round(time.time() - pipeline_start_time, 2)
             try:
+                await self._rollback_changes()
                 await self._update_fleet("IDLE", "IDLE", "IDLE")
-                await self._emit_log("Orchestrator", "Workflow forcibly cancelled by stop signal.", "WARN")
+                await self._emit_log("Orchestrator", "Workflow forcibly cancelled by stop signal. Rolled back any broken files.", "WARN")
                 await self._broadcast("RUN_STOPPED", {
                     "session_id": self.state.session_id,
                     "status": "STOPPED",
@@ -251,8 +291,9 @@ class TeamOrchestrator:
             if self._stop_event.is_set():
                 self.state.status = "stopped"
                 self.state.total_elapsed_time_sec = round(time.time() - pipeline_start_time, 2)
+                await self._rollback_changes()
                 await self._update_fleet("IDLE", "IDLE", "IDLE")
-                await self._emit_log("Orchestrator", "Workflow execution manually stopped by user.", "WARN")
+                await self._emit_log("Orchestrator", "Workflow execution manually stopped by user. Rolled back any broken files.", "WARN")
                 await self._broadcast("RUN_STOPPED", {"session_id": self.state.session_id, "status": "STOPPED", "state": self.state.model_dump()})
                 return {"status": "STOPPED", "state": self.state.model_dump()}
 
@@ -280,12 +321,28 @@ class TeamOrchestrator:
                 })
                 return {"status": "SUCCESS", "state": self.state.model_dump(), "artifacts_history": self.sandbox.artifacts_history}
 
-            # Find pending tasks whose dependencies have completed or failed (with replan)
+            # Mark pending tasks whose dependencies failed as FAILED/BLOCKED
+            for t in list(self.state.tasks.values()):
+                if t.status == TaskStatus.PENDING:
+                    failed_deps = [
+                        dep for dep in t.dependencies
+                        if dep in self.state.tasks and self.state.tasks[dep].status == TaskStatus.FAILED
+                    ]
+                    if failed_deps:
+                        t.status = TaskStatus.FAILED
+                        t.error_trace = f"Blocked: upstream dependency #{failed_deps[0]} failed."
+                        await self._emit_log(
+                            "Orchestrator",
+                            f"Task #{t.task_id} ('{t.title}') cancelled because upstream dependency #{failed_deps[0]} failed.",
+                            "WARN"
+                        )
+
+            # Find pending tasks whose dependencies have strictly completed
             ready_tasks = [
                 task for task in self.state.tasks.values()
                 if task.status == TaskStatus.PENDING
                 and all(
-                    self.state.tasks[dep_id].status in [TaskStatus.COMPLETED, TaskStatus.FAILED]
+                    self.state.tasks[dep_id].status == TaskStatus.COMPLETED
                     for dep_id in task.dependencies
                     if dep_id in self.state.tasks
                 )
@@ -380,18 +437,20 @@ class TeamOrchestrator:
                 if should_fail:
                     self._has_simulated_failure = True
 
-                # Backup original files before writing changes
+                # Backup original files before writing changes and track newly created files
                 code_changes = exec_result.get("code_changes", {})
                 if self.state.project_path:
                     base_proj = Path(self.state.project_path)
                     for filepath in code_changes.keys():
-                        if filepath not in self._file_backups:
-                            disk_f = base_proj / filepath
-                            if disk_f.exists() and disk_f.is_file():
+                        disk_f = base_proj / filepath
+                        if disk_f.exists() and disk_f.is_file():
+                            if filepath not in self._file_backups:
                                 try:
                                     self._file_backups[filepath] = disk_f.read_text(encoding="utf-8", errors="replace")
                                 except Exception:
                                     pass
+                        else:
+                            self._created_files.add(filepath)
 
                 # Apply file writes to sandbox
                 for filepath, code_body in code_changes.items():
@@ -449,34 +508,33 @@ class TeamOrchestrator:
                     )
                     await self._broadcast("TASK_FAILED", task.model_dump())
 
-                    # Check retry depth to prevent infinite loops (Circuit Breaker max 3 retries)
+                    # Check retry depth to prevent infinite loops (Circuit Breaker max 2 retries)
                     depth = 1
                     curr = task
                     while curr.retry_of and curr.retry_of in self.state.tasks:
                         depth += 1
                         curr = self.state.tasks[curr.retry_of]
 
-                    if depth >= 3:
+                    if depth >= 2:
                         await self._emit_log(
                             "CircuitBreaker",
-                            f"Circuit Breaker: Task #{task.task_id} failed verification {depth} times consecutively. Halting replanning to protect codebase from corruption.",
+                            f"Circuit Breaker: Task #{task.task_id} failed verification {depth} times consecutively. Halting execution and rolling back unverified changes.",
                             "ERROR",
                         )
-                        # Automatic Rollback to pristine state
-                        if self._file_backups:
-                            for fpath, orig_code in self._file_backups.items():
-                                try:
-                                    self.sandbox.fs_write(fpath, orig_code)
-                                    await self._emit_log("Rollback", f"Rolled back {fpath} to pristine pre-run state.", "WARN")
-                                except Exception as e:
-                                    await self._emit_log("Rollback", f"Failed rollback for {fpath}: {e}", "ERROR")
+                        # Automatic Rollback to pristine state & delete broken created files
+                        await self._rollback_changes()
+                        # Mark downstream pending tasks as failed
+                        for downstream in self.state.tasks.values():
+                            if downstream.status == TaskStatus.PENDING:
+                                downstream.status = TaskStatus.FAILED
+                                downstream.error_trace = f"Cancelled due to upstream failure of #{task.task_id}"
                         break
 
                     # 4. Trigger Adaptive Replanning with full compile error context
                     await self._update_fleet("REPLANNING", "IDLE", "IDLE")
                     await self._emit_log(
                         "Replanner",
-                        f"Triggering Adaptive Replanning (attempt {depth + 1}/3) — injecting fix node with compiler error context...",
+                        f"Triggering Adaptive Replanning (attempt {depth + 1}/2) — injecting fix node with compiler error context...",
                     )
                     fix_task = self.planner.trigger_replan(self.state, task)
                     await self._broadcast("REPLAN_TRIGGERED", {
@@ -487,7 +545,8 @@ class TeamOrchestrator:
                     replan_count += 1
                     self.state.iteration = replan_count
                     if replan_count >= max_replans:
-                        await self._emit_log("Orchestrator", f"Max replanning iterations ({max_replans}) reached.", "ERROR")
+                        await self._emit_log("Orchestrator", f"Max replanning iterations ({max_replans}) reached. Rolling back broken changes.", "ERROR")
+                        await self._rollback_changes()
                         break
                     replan_needed = True
                     break
@@ -504,15 +563,17 @@ class TeamOrchestrator:
         if self._stop_event.is_set():
             self.state.status = "stopped"
             self.state.total_elapsed_time_sec = round(time.time() - pipeline_start_time, 2)
+            await self._rollback_changes()
             await self._update_fleet("IDLE", "IDLE", "IDLE")
-            await self._emit_log("Orchestrator", "Workflow execution manually stopped by user.", "WARN")
+            await self._emit_log("Orchestrator", "Workflow execution manually stopped by user. Rolled back any broken files.", "WARN")
             await self._broadcast("RUN_STOPPED", {"session_id": self.state.session_id, "status": "STOPPED", "state": self.state.model_dump()})
             return {"status": "STOPPED", "state": self.state.model_dump()}
 
         if uncompleted:
             self.state.status = "failed"
+            await self._rollback_changes()
             await self._update_fleet("IDLE", "IDLE", "IDLE")
-            await self._emit_log("Orchestrator", "DAG execution finished with uncompleted tasks.", "ERROR")
+            await self._emit_log("Orchestrator", "DAG execution finished with uncompleted tasks. Reverted all unverified changes.", "ERROR")
             await self._broadcast("RUN_FINISHED", {"status": "FAILED", "state": self.state.model_dump()})
             return {"status": "FAILED", "message": "DAG stopped with uncompleted tasks.", "state": self.state.model_dump()}
 

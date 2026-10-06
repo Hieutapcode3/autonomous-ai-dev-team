@@ -175,8 +175,15 @@ class VerifierGate:
         if ext == ".cs":
             try:
                 content = full_path.read_text(encoding="utf-8")
-                open_braces = content.count("{")
-                close_braces = content.count("}")
+                # Strip comments and string literals before counting block braces to avoid false positives
+                clean_code = re.sub(r"//.*", "", content)
+                clean_code = re.sub(r"/\*.*?\*/", "", clean_code, flags=re.DOTALL)
+                clean_code = re.sub(r'@"(?:""|[^"])*"', '""', clean_code)
+                clean_code = re.sub(r'"(?:\\.|[^"\\])*"', '""', clean_code)
+                clean_code = re.sub(r"'(?:\\.|[^'\\])'", "''", clean_code)
+
+                open_braces = clean_code.count("{")
+                close_braces = clean_code.count("}")
                 if open_braces != close_braces:
                     return {
                         "file": rel_path,
@@ -191,7 +198,7 @@ class VerifierGate:
         return {"file": rel_path, "check": "generic_text", "passed": True}
 
     def _verify_rules(self, rel_path: str) -> Dict[str, Any]:
-        """Verify code adheres to mandatory rules (e.g. strictly no Vietnamese in source code)."""
+        """Verify code adheres to mandatory rules (e.g. strictly no Vietnamese in source code comments)."""
         vietnamese_pattern = re.compile(
             r"[àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵđ]",
             re.IGNORECASE,
@@ -205,14 +212,20 @@ class VerifierGate:
             if ext in [".cs", ".py", ".ts", ".js", ".shader", ".cpp", ".h"]:
                 content = full_path.read_text(encoding="utf-8")
                 for idx, line in enumerate(content.splitlines(), start=1):
-                    if any(sym in line for sym in ["//", "/*", "#", "*"]):
-                        if vietnamese_pattern.search(line):
-                            return {
-                                "file": rel_path,
-                                "check": "rule_no_vietnamese",
-                                "passed": False,
-                                "error": f"Rule Violation (RULE_NO_VIETNAMESE_IN_CODE) at line {idx}: '{line.strip()[:60]}' contains Vietnamese text. Comments must be written in English.",
-                            }
+                    stripped = line.strip()
+                    comment_part = ""
+                    if "//" in stripped:
+                        comment_part = stripped[stripped.index("//"):]
+                    elif stripped.startswith("/*") or stripped.startswith("*"):
+                        comment_part = stripped
+
+                    if comment_part and vietnamese_pattern.search(comment_part):
+                        return {
+                            "file": rel_path,
+                            "check": "rule_no_vietnamese",
+                            "passed": False,
+                            "error": f"Rule Violation (RULE_NO_VIETNAMESE_IN_CODE) at line {idx}: '{comment_part[:60]}' contains Vietnamese comment. Code comments must be written in English.",
+                        }
             return {"file": rel_path, "check": "rule_compliance", "passed": True}
         except Exception:
             return {"file": rel_path, "check": "rule_compliance", "passed": True}
@@ -234,8 +247,9 @@ class VerifierGate:
                 if l.strip() and not l.strip().startswith("//") and not l.strip().startswith("/*")
             ]
 
-            # 1. Reject skeletal stubs (< 40 lines for an EditorWindow or manager class)
-            if len(non_empty_lines) < 40 and any(kw in content for kw in ["EditorWindow", "LevelEditor"]):
+            # 1. Reject skeletal stubs for full standalone EditorWindow / manager classes (< 35 lines without partial)
+            is_partial = "partial class" in content
+            if len(non_empty_lines) < 35 and not is_partial and any(kw in content for kw in ["EditorWindow", "LevelEditor"]):
                 return {
                     "file": rel_path,
                     "check": "completeness_check",

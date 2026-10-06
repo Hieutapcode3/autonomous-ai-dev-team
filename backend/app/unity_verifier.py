@@ -278,7 +278,11 @@ async def read_compile_errors(
             msg = item.get("message", item.get("text", ""))
             if not msg:
                 continue
-            if any(k in msg_type for k in ("error", "exception", "assert")) or "error" in msg.lower():
+            is_err_type = any(k in msg_type for k in ("error", "exception", "assert"))
+            is_compiler_err = bool(re.search(r"\berror\s+CS\d{4}\b", msg, re.IGNORECASE))
+            is_benign = any(w in msg.lower() for w in ["0 error", "no error", "0 errors", "no errors", "without error"])
+
+            if (is_err_type or is_compiler_err) and not is_benign:
                 errors.append({
                     "message": msg,
                     "stacktrace": item.get("stackTrace") or item.get("stacktrace") or "",

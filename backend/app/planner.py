@@ -522,7 +522,7 @@ class PlannerEngine:
             tasks=tasks,
             execution_order=execution_order,
             iteration=0,
-            max_iterations=15,
+            max_iterations=4,
             total_cost_usd=0.0,
             total_estimated_time_sec=total_est,
             total_elapsed_time_sec=0.0,
