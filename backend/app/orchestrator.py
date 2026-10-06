@@ -54,39 +54,45 @@ class TeamOrchestrator:
     async def _rollback_changes(self):
         """Roll back all modified files and remove newly created broken files to keep Unity clean."""
         project_path = self.state.project_path
-        base = Path(project_path) if project_path else None
+        base = Path(project_path) if project_path else self.sandbox.workspace
 
         # 1. Remove newly created files on disk that caused compile errors
-        if base and self._created_files:
+        if self._created_files:
             for rel in list(self._created_files):
-                try:
-                    f = base / rel
-                    if f.exists() and f.is_file():
-                        f.unlink()
-                        meta = base / f"{rel}.meta"
-                        if meta.exists():
-                            meta.unlink()
-                        await self._emit_log("Rollback", f"Cleaned up broken generated file: {rel}", "WARN")
-                except Exception as e:
-                    await self._emit_log("Rollback", f"Could not remove {rel}: {e}", "WARN")
+                for root in [base, self.sandbox.workspace]:
+                    try:
+                        f = root / rel
+                        if f.exists() and f.is_file():
+                            f.unlink()
+                            meta = root / f"{rel}.meta"
+                            if meta.exists():
+                                meta.unlink()
+                            await self._emit_log("Rollback", f"Cleaned up broken generated file: {rel}", "WARN")
+                    except Exception as e:
+                        await self._emit_log("Rollback", f"Could not remove {rel}: {e}", "WARN")
             self._created_files.clear()
 
         # 2. Restore modified files to pristine pre-run state
         if self._file_backups:
-            for fpath, orig_code in self._file_backups.items():
+            for fpath, orig_code in list(self._file_backups.items()):
                 try:
                     self.sandbox.fs_write(fpath, orig_code)
+                    if base and base != self.sandbox.workspace:
+                        disk_f = base / fpath
+                        if disk_f.exists():
+                            disk_f.write_text(orig_code, encoding="utf-8")
                     await self._emit_log("Rollback", f"Restored {fpath} to pristine pre-run state.", "WARN")
                 except Exception as e:
                     await self._emit_log("Rollback", f"Failed rollback for {fpath}: {e}", "ERROR")
+            self._file_backups.clear()
 
         # 3. Trigger Unity refresh so red console errors disappear immediately
-        if self.state.project_type == "unity":
+        if self.state.project_type == "unity" or (base and (base / "Assets").exists()):
             try:
-                await unity_verifier.refresh_and_wait()
+                await unity_verifier.refresh_and_wait(self._emit_log)
                 await self._emit_log("Rollback", "Triggered Unity Editor refresh to clear compile errors.", "INFO")
-            except Exception:
-                pass
+            except Exception as e:
+                await self._emit_log("Rollback", f"Unity refresh note: {e}", "WARN")
 
     def _read_project_files(self, task: SubTask) -> Dict[str, str]:
         """Read current on-disk content of the task's target files plus contextual sibling files."""
@@ -354,6 +360,7 @@ class TeamOrchestrator:
             # Execute the ready batch
             batch_tasks = ready_tasks
             replan_needed = False
+            circuit_breaker_halt = False
 
             for task in batch_tasks:
                 if self._stop_event.is_set():
@@ -528,6 +535,7 @@ class TeamOrchestrator:
                             if downstream.status == TaskStatus.PENDING:
                                 downstream.status = TaskStatus.FAILED
                                 downstream.error_trace = f"Cancelled due to upstream failure of #{task.task_id}"
+                        circuit_breaker_halt = True
                         break
 
                     # 4. Trigger Adaptive Replanning with full compile error context
@@ -547,9 +555,13 @@ class TeamOrchestrator:
                     if replan_count >= max_replans:
                         await self._emit_log("Orchestrator", f"Max replanning iterations ({max_replans}) reached. Rolling back broken changes.", "ERROR")
                         await self._rollback_changes()
+                        circuit_breaker_halt = True
                         break
                     replan_needed = True
                     break
+
+            if circuit_breaker_halt:
+                break
 
             await asyncio.sleep(0.5)
 

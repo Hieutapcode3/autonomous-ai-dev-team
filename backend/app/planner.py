@@ -624,7 +624,7 @@ class PlannerEngine:
             description=fix_description,
             domain=failed_task.domain,
             complexity=min(10, failed_task.complexity + 1),
-            dependencies=[failed_task.task_id],
+            dependencies=[dep for dep in failed_task.dependencies if dep != failed_task.task_id],
             required_tools=failed_task.required_tools,
             status=TaskStatus.PENDING,
             retry_of=failed_task.task_id,
