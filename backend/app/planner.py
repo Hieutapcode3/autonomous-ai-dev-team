@@ -68,18 +68,10 @@ class PlannerEngine:
         t2_id = f"task_{uuid.uuid4().hex[:6]}"
         t3_id = f"task_{uuid.uuid4().hex[:6]}"
         t4_id = f"task_{uuid.uuid4().hex[:6]}"
+        t5_id = f"task_{uuid.uuid4().hex[:6]}"
 
         if project_type == "unity":
             scripts = discovered_scripts or []
-
-            # Match files specifically mentioned in the objective with smart ranking
-            objective_matched = self._match_scripts(scripts, objective) if scripts else []
-
-            # Determine whether this is a new feature/tool/editor or modification of an existing script
-            is_new_tool_or_feature = any(
-                kw in objective.lower()
-                for kw in ["tạo", "create", "thêm", "add", "editor", "level editor", "system", "tool", "ui", "new", "audit", "làm"]
-            )
 
             # Check if any rule is an explicitly mentioned primary specification (e.g. level-editor.md)
             primary_spec = next((r for r in (rules or []) if r.get("is_primary_spec")), None)
@@ -92,26 +84,17 @@ class PlannerEngine:
                     f"==========================================================\n"
                 )
 
-            # Determine whether this is a level editor or Unity Editor tooling
-            is_editor_tool = any(
+            is_level_editor = any(
                 kw in objective.lower()
-                for kw in ["editor", "level editor", "editor window", "tool cho gd", "authoring", "board editor", "map editor"]
+                for kw in ["level editor", "leveleditor", "level-editor", "level_editor", "board editor", "map editor"]
+            )
+            is_editor_tool = is_level_editor or any(
+                kw in objective.lower()
+                for kw in ["editor", "editor window", "tool cho gd", "authoring", "editor tooling"]
             )
 
-            # Check if the project ALREADY has existing editor scripts
-            existing_editor_scripts = [
-                s for s in scripts
-                if "editor" in s.lower() and any(w in s.lower() for w in ["level", "window", "toolbar", "modes", "data", "tool", "board", "inspector", "navigation", "session", "workspace", "playtest", "serialization"])
-            ]
-
-            # Check for existing UI Toolkit files
-            existing_editor_ui = [
-                s for s in (discovered_ui or [])
-                if "editor" in s.lower() and any(w in s.lower() for w in ["level", "window", "board"])
-            ]
-
             # Determine base scripts directory
-            base_script_dir = "Assets/Scripts"
+            base_script_dir = "Assets/BlockHome/Scripts" if any("BlockHome" in s for s in scripts) else "Assets/Scripts"
             if scripts:
                 first_script = scripts[0].replace("\\", "/")
                 parts = first_script.split("/")
@@ -128,206 +111,244 @@ class PlannerEngine:
 
                 first_target = impl_files[0]
                 target_stem = Path(first_target).stem
-                root_module_dir = str(Path(first_target).parent).replace("\\", "/")
-                arch_files = [f"{root_module_dir}/ArchitectureSpec.md"]
 
                 tasks[t1_id] = SubTask(
                     task_id=t1_id,
-                    title=f"Architecture & Reference Alignment ({target_stem})",
+                    title=f"Core C# Implementation: {target_stem}",
                     description=(
-                        f"Review architecture and align implementation with referenced target: '{target_stem}'.\n"
+                        f"Implement requested changes for objective: '{objective}' directly into target files.\n"
                         f"{spec_guide_text}\n"
-                        "PRE-CHECK (NON-DESTRUCTIVE): Preserve all existing interfaces. Only extend."
-                    ),
-                    domain=TaskDomain.ARCHITECTURE,
-                    complexity=7,
-                    dependencies=[],
-                    required_tools=["fs_write"],
-                    target_files=arch_files,
-                )
-
-                tasks[t2_id] = SubTask(
-                    task_id=t2_id,
-                    title=f"Target Implementation: {target_stem}",
-                    description=(
-                        f"Implement changes for objective: '{objective}' directly into target files.\n"
-                        f"{spec_guide_text}\n"
-                        f"EXPLICIT TARGET FILES: {', '.join(impl_files)}\n"
-                        "MANDATORY: Modify the designated target files carefully. Zero deletions of existing working APIs. English comments only."
+                        f"TARGET FILES: {', '.join(impl_files)}\n"
+                        "MANDATORY ANTI-STUB RULES: Zero skeleton code, zero TODO comments. Write complete, working methods."
                     ),
                     domain=TaskDomain.IMPLEMENTATION,
-                    complexity=7,
-                    dependencies=[t1_id],
+                    complexity=8,
+                    dependencies=[],
                     required_tools=["fs_read", "fs_write"],
                     target_files=impl_files,
                 )
 
-                tasks[t3_id] = SubTask(
-                    task_id=t3_id,
-                    title="UI Toolkit Visual Layout & Style Refinement",
+                tasks[t2_id] = SubTask(
+                    task_id=t2_id,
+                    title="UI Toolkit Layout & Styling Alignment",
                     description=(
                         f"Align visual layout, UXML, and USS styles for: '{objective}'.\n"
                         f"{spec_guide_text}\n"
+                        f"TARGET FILES: {', '.join(scene_files)}\n"
                         "Ensure styling adheres to editor conventions and non-destructive guidelines."
                     ),
                     domain=TaskDomain.IMPLEMENTATION,
                     complexity=6,
-                    dependencies=[t2_id],
+                    dependencies=[t1_id],
                     required_tools=["fs_read", "fs_write"],
                     target_files=scene_files,
                 )
-            elif is_editor_tool and existing_editor_scripts:
-                # The project ALREADY HAS an existing editor implementation! TARGET EXISTING FILES!
-                main_window = next((s for s in existing_editor_scripts if s.endswith("EditorWindow.cs")), existing_editor_scripts[0])
-                other_partials = [s for s in existing_editor_scripts if s != main_window][:5]
-                impl_files = [main_window] + other_partials
 
-                scene_files = existing_editor_ui or [
-                    s for s in (discovered_ui or []) if s.endswith(".uxml") or s.endswith(".uss")
+                tasks[t3_id] = SubTask(
+                    task_id=t3_id,
+                    title="Deterministic Quality Gate & Unity Verification",
+                    description="Verify C# code syntax, check rule compliance, and validate Unity editor console logs.",
+                    domain=TaskDomain.VERIFICATION,
+                    complexity=5,
+                    dependencies=[t2_id],
+                    required_tools=["terminal_exec", "test_runner"],
+                )
+
+            elif is_level_editor:
+                # Targeted 5-phase deliverables pipeline for Level Editor matching Antigravity IDE standard
+                editor_script_dir = "Assets/BlockHome/Scripts/Editor/LevelEditor" if any("BlockHome" in s for s in scripts) else f"{base_script_dir}/Editor/LevelEditor"
+                editor_ui_dir = "Assets/BlockHome/Editor" if any("BlockHome" in s for s in scripts) else "Assets/Editor/LevelEditor"
+
+                data_files = [
+                    f"{editor_script_dir}/EditorLevelData.cs",
+                    f"{editor_script_dir}/EditorSerialization.cs",
                 ]
-                if not scene_files:
-                    main_stem = Path(main_window).stem
-                    scene_files = [
-                        f"Assets/BlockHome/Editor/UXML/{main_stem}.uxml",
-                        f"Assets/BlockHome/Editor/USS/{main_stem}.uss",
-                    ]
-
-                window_stem = Path(main_window).stem
-                root_module_dir = str(Path(main_window).parent).replace("\\", "/")
-                arch_files = [f"{root_module_dir}/ArchitectureSpec.md"]
+                ui_files = [
+                    f"{editor_ui_dir}/UXML/BlockHomeLevelEditorWindow.uxml",
+                    f"{editor_ui_dir}/USS/BlockHomeLevelEditorWindow.uss",
+                ]
+                window_files = [
+                    f"{editor_script_dir}/BlockHomeLevelEditorWindow.cs",
+                    f"{editor_script_dir}/BlockHomeLevelEditorWindow.Toolbar.cs",
+                ]
+                validation_files = [
+                    f"{editor_script_dir}/BlockHomeLevelEditorWindow.Validation.cs",
+                    f"{editor_script_dir}/LevelEditorPlayTest.cs",
+                ]
 
                 tasks[t1_id] = SubTask(
                     task_id=t1_id,
-                    title=f"Level Editor Architecture & Feature Audit ({window_stem})",
+                    title="Level Editor Data Models & Serialization Engine",
                     description=(
-                        f"Review and plan enhancements for the EXISTING Level Editor: '{window_stem}'.\n"
+                        f"Implement complete C# data structures and serialization for the Level Editor objective: '{objective}'.\n"
                         f"{spec_guide_text}\n"
-                        f"Existing Editor Scripts detected in project:\n" + "\n".join([f"- {f}" for f in impl_files]) + "\n\n"
-                        "MANDATORY REQUIREMENT:\n"
-                        "- Do NOT create a duplicate window or reinvent existing data models.\n"
-                        "- Analyze existing partial classes and identify exact methods/modes to add or update per level-editor.md."
+                        f"TARGET FILES: {', '.join(data_files)}\n\n"
+                        "DELIVERABLES & REQUIREMENTS:\n"
+                        "- Grid cell model (2D/3D matrix), layer definitions (Floor, Walls, Furniture/Obstacles, Characters/Spawns, Doors).\n"
+                        "- Level metadata (ID, LevelNumber, GridWidth, GridHeight, MoveLimit, ParTime, ThemeConfig).\n"
+                        "- Serialization methods: LoadFromJson, SaveToJson, ScriptableObject export, and Undo/Redo state snapshot structs.\n"
+                        "- STRICT MANDATE: Full production C# code (> 200 lines). Zero empty methods, zero TODOs."
                     ),
-                    domain=TaskDomain.ARCHITECTURE,
+                    domain=TaskDomain.IMPLEMENTATION,
                     complexity=8,
                     dependencies=[],
-                    required_tools=["fs_write"],
-                    target_files=arch_files,
+                    required_tools=["fs_read", "fs_write"],
+                    target_files=data_files,
                 )
 
                 tasks[t2_id] = SubTask(
                     task_id=t2_id,
-                    title=f"Level Editor C# Logic Enhancement ({window_stem})",
+                    title="UI Toolkit Visual Hierarchy & USS Styling (UXML/USS)",
                     description=(
-                        f"Implement requested objective on the EXISTING Level Editor: '{objective}'.\n"
+                        f"Implement the complete UI Toolkit structure and stylesheet for the Level Editor: '{objective}'.\n"
                         f"{spec_guide_text}\n"
-                        f"Target Existing Editor Scripts:\n" + "\n".join([f"- {f}" for f in impl_files]) + "\n\n"
-                        "MANDATORY NON-DESTRUCTIVE RULES:\n"
-                        "1. EXTEND EXISTING CODE: Work within the existing namespace and partial classes.\n"
-                        "2. PRESERVE ALL EXISTING FUNCTIONALITY: Do not delete, break, or remove existing tools, modes, or data models.\n"
-                        "3. Strictly NO Vietnamese in comments. Clean C# UI Toolkit code."
+                        f"TARGET FILES: {', '.join(ui_files)}\n\n"
+                        "DELIVERABLES & REQUIREMENTS:\n"
+                        "- Multi-column responsive layout: Header toolbar (New/Open/Save/Validate/PlayTest buttons), "
+                        "Left sidebar (Level list scroll view), Center viewport (Canvas container with pan/zoom scroll view), "
+                        "and Right sidebar (Tool palette buttons + Inspector property fields).\n"
+                        "- Comprehensive USS styles: Unity dark theme variables (--unity-colors-*), hover/active states for tools, "
+                        "grid cell borders, badge pills, and clean margins/padding."
                     ),
                     domain=TaskDomain.IMPLEMENTATION,
                     complexity=7,
                     dependencies=[t1_id],
                     required_tools=["fs_read", "fs_write"],
-                    target_files=impl_files,
+                    target_files=ui_files,
                 )
 
                 tasks[t3_id] = SubTask(
                     task_id=t3_id,
-                    title="UI Toolkit Visual Layout & Style Refinement",
+                    title="EditorWindow Controller & Interactive Tool Modes",
                     description=(
-                        f"Align UXML structure and USS stylesheets with the level editor objective: '{objective}'.\n"
+                        f"Implement the main EditorWindow C# controller and interactive tool state machine: '{objective}'.\n"
                         f"{spec_guide_text}\n"
-                        "Ensure UI layout is responsive, toolbar buttons are styled correctly, and canvas preview elements conform to the spec."
+                        f"TARGET FILES: {', '.join(window_files)}\n\n"
+                        "DELIVERABLES & REQUIREMENTS:\n"
+                        "- Inherit from EditorWindow with [MenuItem('Tools/BlockHome/Level Editor')].\n"
+                        "- CreateGUI(): Load and clone UXML, bind button ClickEvents, setup slider/field ChangeEvents.\n"
+                        "- Tool State Machine: Paint mode (place blocks), Erase mode (clear cells), Pick mode (sample cell data), Select mode (inspect properties).\n"
+                        "- Grid pointer interactions: PointerDown, PointerMove, PointerUp drag painting.\n"
+                        "- Visual redraw loop: Draw grid cells with appropriate color coding and preview highlights.\n"
+                        "- STRICT MANDATE: Minimum 250+ lines of robust, working C# logic. Zero skeleton stubs."
                     ),
                     domain=TaskDomain.IMPLEMENTATION,
-                    complexity=6,
+                    complexity=8,
                     dependencies=[t2_id],
                     required_tools=["fs_read", "fs_write"],
-                    target_files=scene_files,
+                    target_files=window_files,
                 )
+
+                tasks[t4_id] = SubTask(
+                    task_id=t4_id,
+                    title="Level Validation Engine & PlayTest Bridge",
+                    description=(
+                        f"Implement the validation rules and PlayTest launcher bridge for: '{objective}'.\n"
+                        f"{spec_guide_text}\n"
+                        f"TARGET FILES: {', '.join(validation_files)}\n\n"
+                        "DELIVERABLES & REQUIREMENTS:\n"
+                        "- Validation engine: Check perimeter wall boundary closure, verify at least one spawn point and goal exist, check furniture path clearance.\n"
+                        "- Error visualizer: Return list of ValidationError(type, message, cellCoord) and highlight erroneous cells on the canvas.\n"
+                        "- PlayTest bridge: Save temporary level state, switch to Unity Play Mode (EditorApplication.isPlaying = true), and instruct LevelLoader to load active test data."
+                    ),
+                    domain=TaskDomain.IMPLEMENTATION,
+                    complexity=7,
+                    dependencies=[t3_id],
+                    required_tools=["fs_read", "fs_write"],
+                    target_files=validation_files,
+                )
+
+                tasks[t5_id] = SubTask(
+                    task_id=t5_id,
+                    title="Deterministic Quality Gate & Unity Verification",
+                    description=(
+                        "Verify C# code syntax across all editor scripts, enforce anti-stub rule compliance (no empty bodies or TODOs), "
+                        "and validate Unity Editor compilation via Unity MCP / console logs."
+                    ),
+                    domain=TaskDomain.VERIFICATION,
+                    complexity=5,
+                    dependencies=[t4_id],
+                    required_tools=["terminal_exec", "test_runner"],
+                )
+
             elif is_editor_tool:
-                # Brand new editor tool where none existed
-                feature_name = "LevelEditor" if any(w in objective.lower() for w in ["level", "map", "board", "stage"]) else "CustomEditor"
-                root_module_dir = base_script_dir.rsplit("/Scripts", 1)[0] if "/Scripts" in base_script_dir else base_script_dir
-                editor_dir = f"{root_module_dir}/Editor/{feature_name}"
-
-                arch_files = [f"{editor_dir}/ArchitectureSpec.md"]
-                impl_files = [
-                    f"{editor_dir}/{feature_name}Window.cs",
-                    f"{editor_dir}/{feature_name}Data.cs",
-                ]
-                scene_files = [
-                    f"{editor_dir}/{feature_name}Window.uxml",
-                    f"{editor_dir}/{feature_name}Window.uss",
-                ]
+                # Other editor tooling (general tools, custom inspectors)
+                feature_name = "CustomTool"
+                editor_script_dir = f"{base_script_dir}/Editor/{feature_name}"
+                impl_files = [f"{editor_script_dir}/{feature_name}Window.cs", f"{editor_script_dir}/{feature_name}Data.cs"]
+                ui_files = [f"{editor_script_dir}/{feature_name}Window.uxml", f"{editor_script_dir}/{feature_name}Window.uss"]
 
                 tasks[t1_id] = SubTask(
                     task_id=t1_id,
-                    title="Unity Architecture & ScriptableObject Blueprint",
+                    title=f"Editor Tool Logic Implementation ({feature_name})",
                     description=(
-                        f"Design game systems for the following objective: '{objective}'.\n"
+                        f"Implement editor tooling logic and data models for: '{objective}'.\n"
                         f"{spec_guide_text}\n"
-                        "PRE-CHECK (YAGNI & NON-DESTRUCTIVE):\n"
-                        "- Evaluate if modifying existing files is strictly necessary. Prefer creating NEW modular components in dedicated folders.\n"
-                        "- NEVER rewrite existing core game managers.\n"
-                        "- Output a concise architecture and data structure spec document."
-                    ),
-                    domain=TaskDomain.ARCHITECTURE,
-                    complexity=8,
-                    dependencies=[],
-                    required_tools=["fs_write"],
-                    target_files=arch_files,
-                )
-
-                tasks[t2_id] = SubTask(
-                    task_id=t2_id,
-                    title="Gameplay C# Logic & Component Implementation",
-                    description=(
-                        f"Implement the following objective in Unity C# scripts: '{objective}'.\n"
-                        f"{spec_guide_text}\n"
-                        "MANDATORY NON-DESTRUCTIVE RULES:\n"
-                        "1. PRE-CHECK: Before modifying any existing script, verify if you can implement the feature in a new script instead.\n"
-                        "2. ZERO DELETIONS: You are STRICTLY FORBIDDEN from deleting, removing, or renaming ANY existing methods, properties, or fields in existing files.\n"
-                        "3. If modifying an existing file: PRESERVE ALL ORIGINAL CODE intact. Only APPEND new methods or hooks.\n"
-                        "4. For Editor tools, place all code in Editor/ folder and strictly follow UI Toolkit conventions.\n"
-                        "5. Strictly NO Vietnamese in comments. Clean English code."
+                        f"TARGET FILES: {', '.join(impl_files)}\n"
+                        "STRICT ANTI-STUB MANDATE: Write fully implemented classes and methods. Zero TODOs."
                     ),
                     domain=TaskDomain.IMPLEMENTATION,
-                    complexity=7,
-                    dependencies=[t1_id],
+                    complexity=8,
+                    dependencies=[],
                     required_tools=["fs_read", "fs_write"],
                     target_files=impl_files,
                 )
 
-                tasks[t3_id] = SubTask(
-                    task_id=t3_id,
-                    title="Unity UI Toolkit & Tooling (UXML/USS/MCP)",
+                tasks[t2_id] = SubTask(
+                    task_id=t2_id,
+                    title="UI Toolkit Visual Layout & Styling",
                     description=(
-                        f"Implement the visual interface, UXML layout, USS styles, and editor tooling for: '{objective}'.\n"
+                        f"Implement UI Toolkit UXML layout and USS styles for: '{objective}'.\n"
                         f"{spec_guide_text}\n"
-                        "NON-DESTRUCTIVE: Do not delete existing assets or scene components. Only generate new UI Toolkit assets or tool configurations."
+                        f"TARGET FILES: {', '.join(ui_files)}"
                     ),
                     domain=TaskDomain.IMPLEMENTATION,
                     complexity=6,
-                    dependencies=[t2_id],
-                    required_tools=["unity_mcp", "fs_write"],
-                    target_files=scene_files,
+                    dependencies=[t1_id],
+                    required_tools=["fs_read", "fs_write"],
+                    target_files=ui_files,
                 )
 
-            tasks[t4_id] = SubTask(
-                task_id=t4_id,
-                title="Deterministic Quality Gate & Unity Verification",
-                description=(
-                    "Verify C# code syntax, check rule compliance (no Vietnamese comments, clean naming), "
-                    "and validate Unity editor console logs. Trigger refresh and fix any compile errors."
-                ),
-                domain=TaskDomain.VERIFICATION,
-                complexity=5,
-                dependencies=[t3_id],
-                required_tools=["terminal_exec", "test_runner"],
-            )
+                tasks[t3_id] = SubTask(
+                    task_id=t3_id,
+                    title="Deterministic Quality Gate & Unity Verification",
+                    description="Verify C# code syntax, check rule compliance, and validate Unity editor console logs.",
+                    domain=TaskDomain.VERIFICATION,
+                    complexity=5,
+                    dependencies=[t2_id],
+                    required_tools=["terminal_exec", "test_runner"],
+                )
+
+            else:
+                # General Gameplay / System Implementation
+                feature_name = "GameplayFeature"
+                impl_files = [f"{base_script_dir}/{feature_name}Controller.cs", f"{base_script_dir}/{feature_name}Data.cs"]
+
+                tasks[t1_id] = SubTask(
+                    task_id=t1_id,
+                    title=f"Gameplay C# Logic Implementation ({feature_name})",
+                    description=(
+                        f"Implement core gameplay logic and data models for: '{objective}'.\n"
+                        f"{spec_guide_text}\n"
+                        f"TARGET FILES: {', '.join(impl_files)}\n"
+                        "STRICT ANTI-STUB MANDATE: Write complete working code. Zero stubs."
+                    ),
+                    domain=TaskDomain.IMPLEMENTATION,
+                    complexity=8,
+                    dependencies=[],
+                    required_tools=["fs_read", "fs_write"],
+                    target_files=impl_files,
+                )
+
+                tasks[t2_id] = SubTask(
+                    task_id=t2_id,
+                    title="Deterministic Quality Gate & Unity Verification",
+                    description="Verify C# syntax, check rule compliance, and validate Unity editor console logs.",
+                    domain=TaskDomain.VERIFICATION,
+                    complexity=5,
+                    dependencies=[t1_id],
+                    required_tools=["terminal_exec", "test_runner"],
+                )
         else:
             obj_lower = objective.lower()
             is_game_proto = any(k in obj_lower for k in ["html", "canvas", "game", "playable", "three.js", "prototype", "2d", "3d", "arcade", "puzzle"])

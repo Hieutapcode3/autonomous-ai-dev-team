@@ -58,6 +58,12 @@ class VerifierGate:
                 all_passed = False
                 error_logs.append(rule_check["error"])
 
+            completeness_check = self._verify_completeness(file_path)
+            checks.append(completeness_check)
+            if not completeness_check["passed"]:
+                all_passed = False
+                error_logs.append(completeness_check["error"])
+
         # 2. Unity MCP live compile verification (for Unity projects with .cs files or QA tasks)
         is_unity_project = (
             any(f.endswith(".cs") for f in created_files)
@@ -210,3 +216,42 @@ class VerifierGate:
             return {"file": rel_path, "check": "rule_compliance", "passed": True}
         except Exception:
             return {"file": rel_path, "check": "rule_compliance", "passed": True}
+
+    def _verify_completeness(self, rel_path: str) -> Dict[str, Any]:
+        """Verify that generated code is a real, non-skeletal implementation."""
+        if not rel_path.endswith(".cs"):
+            return {"file": rel_path, "check": "completeness_check", "passed": True}
+
+        try:
+            full_path = self.sandbox.workspace / rel_path
+            if not full_path.exists():
+                return {"file": rel_path, "check": "completeness_check", "passed": True}
+
+            content = full_path.read_text(encoding="utf-8", errors="replace")
+            non_empty_lines = [
+                l.strip()
+                for l in content.splitlines()
+                if l.strip() and not l.strip().startswith("//") and not l.strip().startswith("/*")
+            ]
+
+            # 1. Reject skeletal stubs (< 40 lines for an EditorWindow or manager class)
+            if len(non_empty_lines) < 40 and any(kw in content for kw in ["EditorWindow", "LevelEditor"]):
+                return {
+                    "file": rel_path,
+                    "check": "completeness_check",
+                    "passed": False,
+                    "error": f"Skeletal stub detected in {rel_path} ({len(non_empty_lines)} lines). Complete, working implementation is mandatory. Do not output skeleton stubs.",
+                }
+
+            # 2. Reject placeholder TODOs in place of actual method bodies
+            if "throw new NotImplementedException" in content:
+                return {
+                    "file": rel_path,
+                    "check": "completeness_check",
+                    "passed": False,
+                    "error": f"Unimplemented method detected in {rel_path} (throw new NotImplementedException). All methods must be fully implemented with concrete Unity logic.",
+                }
+
+            return {"file": rel_path, "check": "completeness_check", "passed": True}
+        except Exception:
+            return {"file": rel_path, "check": "completeness_check", "passed": True}

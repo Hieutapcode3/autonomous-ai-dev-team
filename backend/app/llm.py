@@ -64,7 +64,12 @@ NON_DESTRUCTIVE_RULES = (
     "   - If modifying an existing file: PRESERVE ALL ORIGINAL CODE intact. You may ONLY append new methods or surgically insert minimal hooks.\n\n"
     "3. MINIMAL SURGICAL EDITS:\n"
     "   - Do NOT rewrite a 500+ line file from scratch if you only need to add 1 method.\n"
-    "   - Do NOT refactor, reformat, or reorganize existing working code.\n"
+    "   - Do NOT refactor, reformat, or reorganize existing working code.\n\n"
+    "4. MANDATORY FULL IMPLEMENTATION — ZERO SKELETON STUBS ALLOWED:\n"
+    "   - You are STRICTLY FORBIDDEN from generating skeletal stubs, dummy templates, or placeholder comments (e.g. '// TODO', '// implement logic here', '/* ... */').\n"
+    "   - Every class, method, event callback, and algorithm MUST be fully and concretely implemented in complete, working C#.\n"
+    "   - Do NOT output 40-50 line minimal stubs that merely open an empty window or log a message. Fully implement the data structures, UI element bindings, toolbar tools, and serialization.\n"
+    "   - Any skeletal stub will be IMMEDIATELY REJECTED by the Quality Gate Verifier.\n"
 )
 
 
@@ -243,7 +248,7 @@ class LLMClient:
                     },
                     json={
                         "model": claude_model,
-                        "max_tokens": 4096,
+                        "max_tokens": 8192,
                         "system": system_prompt,
                         "messages": [{"role": "user", "content": user_prompt}],
                     },
@@ -459,6 +464,7 @@ class LLMClient:
                 "generationConfig": {
                     "responseMimeType": "application/json",
                     "temperature": 0.2,
+                    "maxOutputTokens": 8192,
                 }
             }
 
@@ -595,6 +601,10 @@ class LLMClient:
             ],
             "format": "json",
             "stream": True,
+            "options": {
+                "num_predict": 8192,
+                "temperature": 0.2,
+            },
         }
 
         accumulated_text = ""
