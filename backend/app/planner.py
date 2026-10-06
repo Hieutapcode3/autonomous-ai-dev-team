@@ -9,57 +9,47 @@ from app.schemas import SubTask, TaskDomain, TaskStatus, GlobalDAGState
 class PlannerEngine:
     @staticmethod
     def _match_scripts(discovered_scripts: List[str], objective: str) -> List[str]:
-        """Rank and return scripts matching exact filename, stem, or relevant keywords."""
+        """
+        Identify scripts explicitly or structurally referenced in the objective without hardcoded language dictionaries:
+        1. Tokens with file extensions (.cs, .uxml, .uss, etc.) or @mentions
+        2. PascalCase / CamelCase class identifiers (e.g. BlockHomeLevelEditorWindow, GameManager)
+        3. Hyphenated / compound identifiers (e.g. level-editor, grid_manager)
+        """
         if not discovered_scripts or not objective:
             return []
 
-        stopwords = {
-            "làm", "dựa", "vào", "file", "cho", "và", "các", "những", "để", "thêm",
-            "sửa", "tạo", "trong", "theo", "viết", "hãy", "code", "the", "a", "an",
-            "in", "to", "for", "with", "from", "by", "on", "of", "and", "is", "it"
-        }
+        # Extract tokens that structurally look like code artifacts
+        file_tokens = re.findall(r"@?([\w\.-]+\.(?:cs|uxml|uss|json|shader|py|ts|js))\b", objective, re.IGNORECASE)
+        pascal_tokens = re.findall(r"\b([A-Z][a-zA-Z0-9]+)\b", objective)
+        compound_tokens = re.findall(r"\b([a-zA-Z0-9]+[-_][a-zA-Z0-9_-]+)\b", objective)
 
-        tokens = re.findall(r"[\w\.-]+", objective)
+        candidate_identifiers = set()
+        for t in file_tokens + pascal_tokens + compound_tokens:
+            candidate_identifiers.add(t.lower())
+            candidate_identifiers.add(Path(t).stem.lower())
 
-        # 1. Exact match against filename or stem
+        if not candidate_identifiers:
+            return []
+
         exact_matches: List[str] = []
+        partial_matches: List[str] = []
+
         for script in discovered_scripts:
             s_name = Path(script).name.lower()
             s_stem = Path(script).stem.lower()
-            for t in tokens:
-                t_lower = t.lower()
-                if t_lower == s_name or t_lower == s_stem:
-                    if script not in exact_matches:
-                        exact_matches.append(script)
 
-        if exact_matches:
-            return exact_matches[:4]
+            if s_name in candidate_identifiers or s_stem in candidate_identifiers:
+                if script not in exact_matches:
+                    exact_matches.append(script)
+                continue
 
-        # 2. Keyword relevance scoring (ignoring stopwords)
-        meaningful_keywords = [
-            t.lower() for t in tokens
-            if len(t) >= 3 and t.lower() not in stopwords
-        ]
+            for t in candidate_identifiers:
+                if len(t) >= 6 and t in s_stem:
+                    if script not in partial_matches and script not in exact_matches:
+                        partial_matches.append(script)
+                    break
 
-        if not meaningful_keywords:
-            return []
-
-        scored_scripts = []
-        for script in discovered_scripts:
-            s_lower = script.lower()
-            s_name_lower = Path(script).name.lower()
-            score = 0
-            for kw in meaningful_keywords:
-                if kw in s_name_lower:
-                    score += 3  # Higher weight if keyword is in the class name
-                elif kw in s_lower:
-                    score += 1
-
-            if score > 0:
-                scored_scripts.append((score, script))
-
-        scored_scripts.sort(key=lambda x: -x[0])
-        return [script for _, script in scored_scripts[:4]]
+        return (exact_matches + partial_matches)[:4]
 
     def decompose_objective(
         self,

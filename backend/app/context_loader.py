@@ -160,7 +160,8 @@ class ProjectContextLoader:
 
         at_mentions = re.findall(r"@([\w\./\\-]+)", objective)
         ext_tokens = re.findall(r"\b([\w\.-]+\.(?:md|cs|uxml|uss|json|shader|py|ts|tsx|js|html|txt))\b", objective, re.IGNORECASE)
-        stem_tokens = re.findall(r"\b([A-Za-z0-9_-]{4,})\b", objective)
+        pascal_tokens = re.findall(r"\b([A-Z][a-zA-Z0-9]+)\b", objective)
+        compound_tokens = re.findall(r"\b([a-zA-Z0-9]+[-_][a-zA-Z0-9_-]+)\b", objective)
 
         candidates = set()
         for m in at_mentions:
@@ -170,7 +171,7 @@ class ProjectContextLoader:
         for t in ext_tokens:
             candidates.add(t)
             candidates.add(Path(t).name)
-        for s in stem_tokens:
+        for s in pascal_tokens + compound_tokens:
             candidates.add(s)
 
         ignore_folders = {
@@ -178,10 +179,6 @@ class ProjectContextLoader:
             "Build", "Builds", "node_modules", "bin", "logs"
         }
         valid_code_exts = {".cs", ".uxml", ".uss", ".json", ".shader", ".py", ".ts", ".tsx", ".js", ".html", ".css"}
-        generic_stem_words = {
-            "level", "editor", "game", "system", "tool", "file", "code", "scene",
-            "view", "data", "test", "demo", "play", "home", "block", "script", "manager"
-        }
 
         matched_specs = []
         matched_code = []
@@ -211,12 +208,11 @@ class ProjectContextLoader:
                     if c_lower == fname_lower:
                         matched = True
                         break
-                    # 3. Exact stem match for compound/specific names (excluding generic single words)
+                    # 3. Exact stem match for PascalCase or compound identifiers
                     if (
                         "." not in c
                         and c_lower == stem_lower
                         and len(c) >= 5
-                        and c_lower not in generic_stem_words
                         and ext_lower in (valid_code_exts | {".md", ".txt"})
                     ):
                         matched = True
