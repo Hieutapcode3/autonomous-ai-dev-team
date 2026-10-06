@@ -261,10 +261,10 @@ async def stop_session(session_id: str, req: StopSessionRequest = StopSessionReq
 
     state = sessions[session_id]
 
-    # Verify task key if configured
-    if getattr(state, "task_key", None):
+    # Verify task key if configured and non-empty
+    if getattr(state, "task_key", None) and str(state.task_key).strip():
         submitted_key = (req.task_key or "").strip()
-        expected_key = state.task_key.strip()
+        expected_key = str(state.task_key).strip()
         if submitted_key != expected_key:
             raise HTTPException(
                 status_code=403,
@@ -314,9 +314,12 @@ async def run_session(session_id: str, opts: RunOptions = RunOptions()):
     if state.status == "running":
         return {"message": "Session is already executing.", "status": "running"}
 
-    if opts.task_key:
+    if opts.task_key and opts.task_key.strip():
         state.task_key = opts.task_key.strip()
         state.has_task_key = True
+    else:
+        state.task_key = None
+        state.has_task_key = False
 
     sim_mode = (
         opts.use_simulation

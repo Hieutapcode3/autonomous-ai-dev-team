@@ -413,8 +413,8 @@ export default function ControlCenterPage() {
         setSessionState((prev: any) => ({
           ...prev,
           status: "running",
-          task_key: taskKey || prev?.task_key,
-          has_task_key: Boolean(taskKey || prev?.has_task_key),
+          task_key: taskKey ? taskKey.trim() : undefined,
+          has_task_key: Boolean(taskKey && taskKey.trim()),
         }));
       } else {
         const errData = await res.json().catch(() => ({}));
@@ -426,26 +426,27 @@ export default function ControlCenterPage() {
   };
 
   // Handle Stop Workflow execution
-  const handleStopWorkflow = async (taskKey?: string): Promise<boolean> => {
-    if (!sessionId) return false;
+  const handleStopWorkflow = async (taskKey?: string): Promise<{ success: boolean; error?: string }> => {
+    if (!sessionId) return { success: false, error: "Không tìm thấy Session ID." };
     try {
       const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/stop`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ task_key: taskKey || undefined }),
+        body: JSON.stringify({ task_key: taskKey ? taskKey.trim() : undefined }),
       });
       if (res.ok) {
         setSessionState((prev: any) => ({ ...prev, status: "stopped" }));
         appendLog("Orchestrator", "Workflow execution manually stopped by user.", "WARN");
-        return true;
+        return { success: true };
       } else {
         const err = await res.json().catch(() => ({}));
-        appendLog("Orchestrator", `Stop request failed: ${err.detail || res.statusText}`, "ERROR");
-        return false;
+        const errMsg = err.detail || res.statusText || "Lỗi khi dừng quy trình.";
+        appendLog("Orchestrator", `Stop request failed: ${errMsg}`, "ERROR");
+        return { success: false, error: errMsg };
       }
     } catch {
       appendLog("System", "Failed to connect to backend to stop session.", "ERROR");
-      return false;
+      return { success: false, error: "Không thể kết nối đến backend server." };
     }
   };
 

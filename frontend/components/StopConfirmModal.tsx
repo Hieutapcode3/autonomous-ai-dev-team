@@ -6,7 +6,7 @@ import { X, Square, AlertOctagon, KeyRound, Eye, EyeOff, Loader2 } from "lucide-
 interface StopConfirmModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onConfirmStop: (taskKey?: string) => Promise<boolean>;
+  onConfirmStop: (taskKey?: string) => Promise<{ success: boolean; error?: string } | boolean>;
   hasTaskKey: boolean;
   sessionId: string;
 }
@@ -23,6 +23,14 @@ export function StopConfirmModal({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  React.useEffect(() => {
+    if (isOpen) {
+      setTaskKeyInput("");
+      setErrorMessage(null);
+      setIsSubmitting(false);
+    }
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
   const handleStop = async (e: React.FormEvent) => {
@@ -36,11 +44,16 @@ export function StopConfirmModal({
 
     setIsSubmitting(true);
     try {
-      const success = await onConfirmStop(taskKeyInput.trim() || undefined);
-      if (success) {
+      const res = await onConfirmStop(taskKeyInput.trim() || undefined);
+      const isSuccess = typeof res === "boolean" ? res : res.success;
+      if (isSuccess) {
         onClose();
       } else {
-        setErrorMessage("Mã Task Key không chính xác. Không thể dừng quy trình!");
+        const errorDetail =
+          typeof res === "object" && res.error
+            ? res.error
+            : "Không thể dừng quy trình. Vui lòng thử lại.";
+        setErrorMessage(errorDetail);
       }
     } catch (err: any) {
       setErrorMessage(err?.message || "Lỗi khi gửi yêu cầu dừng workflow.");
