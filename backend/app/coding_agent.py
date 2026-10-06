@@ -180,12 +180,22 @@ class CodingAgent:
 
         # 1. Search for keywords mentioned in the subtask title / description
         title_words = re.findall(r"[A-Z][a-zA-Z0-9]+", task.title + " " + (task.description or ""))
-        keywords = set(w for w in title_words if len(w) >= 4 and w not in ["Task", "Create", "Implement", "Build", "Level", "Editor"])
+        stop_words = {
+            "Task", "Create", "Implement", "Build", "Level", "Editor",
+            "Data", "Engine", "Models", "System", "Object", "Unity", "None", "True", "False"
+        }
+        keywords = set(w for w in title_words if len(w) >= 4 and w not in stop_words)
 
-        for kw in list(keywords)[:4]:
-            results = self.sandbox.fs_search(kw, max_results=8)
-            for r in results:
-                discovered_symbols.append(f"[{r['file']}:{r['line']}] {r['content']}")
+        for kw in list(keywords)[:3]:
+            try:
+                results = await asyncio.wait_for(
+                    asyncio.to_thread(self.sandbox.fs_search, kw, max_results=6),
+                    timeout=2.0,
+                )
+                for r in results:
+                    discovered_symbols.append(f"[{r['file']}:{r['line']}] {r['content']}")
+            except Exception:
+                pass
 
         if discovered_symbols and log_callback:
             await log_callback(

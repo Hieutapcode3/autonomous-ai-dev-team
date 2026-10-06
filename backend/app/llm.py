@@ -36,19 +36,12 @@ def _parse_model_json_output(raw_text: str) -> Dict[str, Any]:
     return {"explanation": raw_text, "files": [], "code_changes": {}, "commands": []}
 
 
-# Ordered list of current Gemini models to try, newest first.
-# Update this list whenever Google releases or deprecates models.
+# Ordered list of active Google Gemini models to try, newest and most reliable first.
 GEMINI_MODELS_PRIORITY = [
-    "gemini-3.8-flash",
-    "gemini-3.5-flash-lite",
-    "gemini-3.5-flash",
-    "gemini-3.0-ultra-5",
-    "gemini-2.5-flash-preview-04-17",
-    "gemini-2.5-flash",
     "gemini-2.0-flash",
     "gemini-2.0-flash-lite",
-    "gemini-1.5-pro-latest",
-    "gemini-1.5-flash-latest",
+    "gemini-1.5-flash",
+    "gemini-1.5-pro",
 ]
 
 NON_DESTRUCTIVE_RULES = (
@@ -524,6 +517,11 @@ class LLMClient:
                     else:
                         err_body = resp.text
                         last_error = f"HTTP {resp.status_code}: {err_body[:200]}"
+                        if "API_KEY_INVALID" in err_body or "API key not valid" in err_body:
+                            if log_callback:
+                                await log_callback("GEMINI", "Google API Key is invalid or expired.", "ERROR")
+                            raise RuntimeError(f"Google API Key is invalid or expired: {last_error}")
+
                         if log_callback:
                             await log_callback(
                                 "GEMINI",
@@ -865,7 +863,9 @@ class LLMClient:
         cmd_args = [gemini_bin]
         if api_token:
             cmd_args.extend(["-t", api_token])
-        cmd_args.append(prompt)
+        # Cap prompt length to stay within Windows CreateProcess argument limit (8191 chars)
+        safe_cli_prompt = prompt if len(prompt) < 6000 else prompt[:6000]
+        cmd_args.append(safe_cli_prompt)
 
         proc = await asyncio.create_subprocess_exec(
             *cmd_args,

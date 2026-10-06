@@ -79,6 +79,16 @@ class SandboxRuntime:
         new_content = current_content.replace(target_block, replacement_block, 1)
         return self.fs_write(file_path, new_content)
 
+    IGNORED_DIRS = {
+        ".git", ".vs", ".idea", ".vscode", "Library", "Temp", "Logs", "obj",
+        "Build", "Builds", "node_modules", "__pycache__", "PackageCache", "artifacts"
+    }
+
+    ALLOWED_SEARCH_EXTS = {
+        ".cs", ".json", ".txt", ".md", ".uxml", ".uss", ".yaml", ".yml",
+        ".xml", ".shader", ".cginc", ".hlsl", ".py", ".ts", ".js", ".html", ".css"
+    }
+
     def fs_list(self, sub_dir: str = ".") -> List[Dict[str, Any]]:
         safe_dir = self._resolve_safe_path(sub_dir)
         if not safe_dir.exists() or not safe_dir.is_dir():
@@ -86,20 +96,28 @@ class SandboxRuntime:
 
         results = []
         for root, dirs, files in os.walk(safe_dir):
+            dirs[:] = [d for d in dirs if d not in self.IGNORED_DIRS and not d.startswith(".")]
             rel_root = Path(root).relative_to(self.workspace)
             for f in files:
                 rel_file = str(rel_root / f).replace("\\", "/")
                 p = Path(root) / f
-                results.append({
-                    "path": rel_file,
-                    "size_bytes": p.stat().st_size,
-                    "is_dir": False
-                })
+                try:
+                    results.append({
+                        "path": rel_file,
+                        "size_bytes": p.stat().st_size,
+                        "is_dir": False
+                    })
+                except Exception:
+                    continue
         return results
 
     def fs_search(self, pattern: str, sub_dir: str = ".", max_results: int = 50) -> List[Dict[str, Any]]:
         """Search for pattern across text files in workspace (case-insensitive regex)."""
         safe_dir = self._resolve_safe_path(sub_dir)
+        # Prioritize Unity Assets directory if searching from project root
+        if sub_dir == "." and (self.workspace / "Assets").is_dir():
+            safe_dir = self.workspace / "Assets"
+
         if not safe_dir.exists() or not safe_dir.is_dir():
             return []
 
@@ -109,15 +127,26 @@ class SandboxRuntime:
             regex = re.compile(re.escape(pattern), re.IGNORECASE)
 
         results = []
-        skip_exts = {".meta", ".dll", ".png", ".jpg", ".jpeg", ".asset", ".prefab", ".mat", ".unity", ".fbx"}
+        inspected_count = 0
+        max_inspected_files = 2000
+
         for root, dirs, files in os.walk(safe_dir):
+            dirs[:] = [d for d in dirs if d not in self.IGNORED_DIRS and not d.startswith(".")]
             rel_root = Path(root).relative_to(self.workspace)
             for f in files:
                 ext = Path(f).suffix.lower()
-                if ext in skip_exts:
+                if ext not in self.ALLOWED_SEARCH_EXTS:
                     continue
+
                 p = Path(root) / f
                 try:
+                    # Skip huge binary or cached files over 512KB
+                    if p.stat().st_size > 512 * 1024:
+                        continue
+                    inspected_count += 1
+                    if inspected_count > max_inspected_files:
+                        return results
+
                     text = p.read_text(encoding="utf-8", errors="ignore")
                     for line_num, line in enumerate(text.splitlines(), start=1):
                         if regex.search(line):
