@@ -424,6 +424,20 @@ class LLMClient:
                 parts.append(f"### {path}\n```\n{content[:3000]}\n```")
             prior_outputs_text = "\n\n".join(parts)
 
+        self_corr_err = context.get("self_correction_error")
+        self_corr_text = (
+            f"\n\n🚨 CRITICAL SELF-CORRECTION TURN 🚨\n"
+            f"Pre-verification detected the following issues in your previous output:\n"
+            f"{self_corr_err}\n"
+            f"Fix these exact compiler / syntax errors immediately in this output while keeping all other working logic intact.\n"
+        ) if self_corr_err else ""
+
+        sym_refs = context.get("discovered_symbol_references")
+        sym_text = f"\n\nDISCOVERED WORKSPACE SYMBOLS & REFERENCES:\n{sym_refs}\n" if sym_refs else ""
+
+        le_contracts = context.get("level_editor_contracts")
+        le_text = f"\n\n{le_contracts}\n" if le_contracts else ""
+
         user_content = (
             f"Overall Objective: {context.get('objective', '')}\n"
             f"Project Directory: {context.get('project_path', 'Sandbox')}\n"
@@ -433,8 +447,11 @@ class LLMClient:
             f"Target Files: {target_files_hint}\n"
             f"Complexity Level: {task.complexity}/10\n\n"
             f"{NON_DESTRUCTIVE_RULES}\n\n"
+            f"{le_text}"
+            f"{self_corr_text}"
             f"EXISTING FILE CONTENTS (read these carefully — modify them, do NOT rewrite from scratch):\n{existing_files_text}\n"
             f"{orig_text}\n\n"
+            f"{sym_text}\n"
             f"PRIOR TASK OUTPUTS IN THIS SESSION (already written by earlier tasks — do not duplicate):\n{prior_outputs_text}\n"
         )
 

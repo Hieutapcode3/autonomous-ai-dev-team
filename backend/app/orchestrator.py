@@ -9,6 +9,7 @@ from app.verifier import VerifierGate
 from app.planner import PlannerEngine
 from app.llm import LLMClient
 from app.github_service import GitHubService
+from app.coding_agent import CodingAgent
 from app import unity_verifier
 
 
@@ -421,25 +422,42 @@ class TeamOrchestrator:
                     if (task.target_files and f in task.target_files) or f in existing_files
                 }
 
-                exec_result = await self.llm.execute_task(
-                    task=task,
-                    model=allocated_model,
-                    context={
-                        "objective": self.state.objective,
-                        "project_path": self.state.project_path,
-                        "project_type": self.state.project_type,
-                        "rules": self.state.ingested_rules,
-                        "skills": self.state.ingested_skills,
-                        "reference_media": self.state.reference_media,
-                        "demo_html": self.state.demo_html,
-                        "existing_file_contents": existing_files,
-                        "prior_task_outputs": prior_outputs,
-                        "original_pre_edit_contents": orig_refs,
-                    },
-                    simulate_error=should_fail,
-                    log_callback=self._emit_log,
-                    stop_event=self._stop_event,
-                )
+                task_context = {
+                    "objective": self.state.objective,
+                    "project_path": self.state.project_path,
+                    "project_type": self.state.project_type,
+                    "rules": self.state.ingested_rules,
+                    "skills": self.state.ingested_skills,
+                    "reference_media": self.state.reference_media,
+                    "demo_html": self.state.demo_html,
+                    "existing_file_contents": existing_files,
+                    "prior_task_outputs": prior_outputs,
+                    "original_pre_edit_contents": orig_refs,
+                }
+
+                if task.domain in [TaskDomain.IMPLEMENTATION, TaskDomain.VERIFICATION] and not should_fail:
+                    coding_agent = CodingAgent(
+                        sandbox=self.sandbox,
+                        verifier=self.verifier,
+                        llm=self.llm,
+                        max_inner_turns=3,
+                    )
+                    exec_result = await coding_agent.run(
+                        task=task,
+                        model=allocated_model,
+                        context=task_context,
+                        log_callback=self._emit_log,
+                        stop_event=self._stop_event,
+                    )
+                else:
+                    exec_result = await self.llm.execute_task(
+                        task=task,
+                        model=allocated_model,
+                        context=task_context,
+                        simulate_error=should_fail,
+                        log_callback=self._emit_log,
+                        stop_event=self._stop_event,
+                    )
 
                 if should_fail:
                     self._has_simulated_failure = True

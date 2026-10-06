@@ -1,6 +1,7 @@
 import os
 import subprocess
 import difflib
+import re
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 
@@ -94,6 +95,42 @@ class SandboxRuntime:
                     "size_bytes": p.stat().st_size,
                     "is_dir": False
                 })
+        return results
+
+    def fs_search(self, pattern: str, sub_dir: str = ".", max_results: int = 50) -> List[Dict[str, Any]]:
+        """Search for pattern across text files in workspace (case-insensitive regex)."""
+        safe_dir = self._resolve_safe_path(sub_dir)
+        if not safe_dir.exists() or not safe_dir.is_dir():
+            return []
+
+        try:
+            regex = re.compile(pattern, re.IGNORECASE)
+        except Exception:
+            regex = re.compile(re.escape(pattern), re.IGNORECASE)
+
+        results = []
+        skip_exts = {".meta", ".dll", ".png", ".jpg", ".jpeg", ".asset", ".prefab", ".mat", ".unity", ".fbx"}
+        for root, dirs, files in os.walk(safe_dir):
+            rel_root = Path(root).relative_to(self.workspace)
+            for f in files:
+                ext = Path(f).suffix.lower()
+                if ext in skip_exts:
+                    continue
+                p = Path(root) / f
+                try:
+                    text = p.read_text(encoding="utf-8", errors="ignore")
+                    for line_num, line in enumerate(text.splitlines(), start=1):
+                        if regex.search(line):
+                            rel_file = str(rel_root / f).replace("\\", "/")
+                            results.append({
+                                "file": rel_file,
+                                "line": line_num,
+                                "content": line.strip()[:200],
+                            })
+                            if len(results) >= max_results:
+                                return results
+                except Exception:
+                    continue
         return results
 
     def terminal_exec(self, command: str, timeout_sec: int = 30) -> Dict[str, Any]:
