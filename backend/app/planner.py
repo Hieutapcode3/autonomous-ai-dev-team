@@ -1,3 +1,4 @@
+import json
 import re
 import uuid
 from pathlib import Path
@@ -531,6 +532,209 @@ class PlannerEngine:
             ingested_rules=rules or [],
             ingested_skills=skills or [],
         )
+
+    async def decompose_objective_intelligent(
+        self,
+        session_id: str,
+        objective: str,
+        project_type: str = "generic",
+        rules: Optional[List[Dict[str, Any]]] = None,
+        skills: Optional[List[Dict[str, Any]]] = None,
+        discovered_scripts: Optional[List[str]] = None,
+        discovered_ui: Optional[List[str]] = None,
+        explicit_target_files: Optional[List[str]] = None,
+        llm_client: Optional[Any] = None,
+        log_callback: Optional[Any] = None,
+    ) -> GlobalDAGState:
+        """
+        Intelligent LLM Leader Task Decomposition (Sections 7 & 8 of analysis).
+        Dynamically analyzes requirements to construct an optimal Task DAG.
+        Falls back seamlessly to deterministic heuristic pipeline if LLM is offline or in simulation.
+        """
+        if not llm_client:
+            return self.decompose_objective(
+                session_id=session_id,
+                objective=objective,
+                project_type=project_type,
+                rules=rules,
+                skills=skills,
+                discovered_scripts=discovered_scripts,
+                discovered_ui=discovered_ui,
+                explicit_target_files=explicit_target_files,
+            )
+
+        dynamic_tasks = await self._decompose_via_llm(
+            llm_client=llm_client,
+            objective=objective,
+            project_type=project_type,
+            rules=rules,
+            discovered_scripts=discovered_scripts,
+            explicit_target_files=explicit_target_files,
+            log_callback=log_callback,
+        )
+
+        if not dynamic_tasks:
+            return self.decompose_objective(
+                session_id=session_id,
+                objective=objective,
+                project_type=project_type,
+                rules=rules,
+                skills=skills,
+                discovered_scripts=discovered_scripts,
+                discovered_ui=discovered_ui,
+                explicit_target_files=explicit_target_files,
+            )
+
+        from app.router import DynamicModelRouter
+        router = DynamicModelRouter()
+
+        for task_id, task in dynamic_tasks.items():
+            task.estimated_time_sec = self.estimate_task_duration(task.domain, task.complexity)
+            if project_type == "unity":
+                agent_names = {
+                    TaskDomain.ARCHITECTURE: "Game Architect",
+                    TaskDomain.IMPLEMENTATION: "Gameplay C# Programmer",
+                    TaskDomain.VERIFICATION: "Unity QA Verifier",
+                    TaskDomain.ANALYSIS: "Game Systems Analyst",
+                    TaskDomain.UTILITY: "Unity Asset Tool Specialist",
+                }
+                task.assigned_agent = agent_names.get(task.domain, "Unity Specialist")
+            else:
+                task.assigned_agent = router.get_agent_for_task(task.domain)
+            model, rationale = router.route_task(task)
+            task.assigned_model = model
+            task.routing_rationale = rationale
+
+        execution_order = self.compute_topological_batches(dynamic_tasks)
+        total_est = self.compute_pipeline_estimated_time(dynamic_tasks, execution_order)
+
+        return GlobalDAGState(
+            session_id=session_id,
+            objective=objective,
+            tasks=dynamic_tasks,
+            execution_order=execution_order,
+            iteration=0,
+            max_iterations=4,
+            total_cost_usd=0.0,
+            total_estimated_time_sec=total_est,
+            total_elapsed_time_sec=0.0,
+            status="ready",
+            project_type=project_type,
+            ingested_rules=rules or [],
+            ingested_skills=skills or [],
+        )
+
+    async def _decompose_via_llm(
+        self,
+        llm_client: Any,
+        objective: str,
+        project_type: str,
+        rules: Optional[List[Dict[str, Any]]],
+        discovered_scripts: Optional[List[str]],
+        explicit_target_files: Optional[List[str]],
+        log_callback: Optional[Any] = None,
+    ) -> Optional[Dict[str, SubTask]]:
+        """Query LLM Leader to dynamically decompose requirement into a specialized Task DAG."""
+        primary_spec = next((r for r in (rules or []) if r.get("is_primary_spec")), None)
+        spec_text = primary_spec.get("content", "")[:2500] if primary_spec else "None."
+
+        scripts_sample = "\n".join(discovered_scripts[:15]) if discovered_scripts else "None."
+        targets_hint = ", ".join(explicit_target_files) if explicit_target_files else "determine from objective"
+
+        prompt = (
+            f"You are the Lead Software Architect of an autonomous multi-agent dev team.\n"
+            f"Decompose the following user objective into a tailored, minimal Task DAG (3 to 6 subtasks).\n\n"
+            f"OBJECTIVE: {objective}\n"
+            f"PROJECT TYPE: {project_type}\n"
+            f"USER SPECIFICATION / RULES:\n{spec_text}\n\n"
+            f"RELEVANT SCRIPTS IN REPOSITORY:\n{scripts_sample}\n\n"
+            f"TARGET FILES HINT: {targets_hint}\n\n"
+            "MANDATORY REQUIREMENTS:\n"
+            "1. Decompose logically with clear module boundaries (e.g. Data Models & Serialization -> Core Controller -> UI & Tools -> Validation & PlayTest -> Quality Gate).\n"
+            "2. Establish dependencies correctly (allow parallel tasks where appropriate).\n"
+            "3. The final task MUST be a VERIFICATION task that validates the build/syntax.\n"
+            "4. Return STRICTLY a JSON array of tasks with this format:\n"
+            "[\n"
+            "  {\n"
+            '    "task_id": "task_1",\n'
+            '    "title": "Data Models & Storage Engine",\n'
+            '    "description": "Concrete deliverables and requirements",\n'
+            '    "domain": "implementation",\n'
+            '    "complexity": 8,\n'
+            '    "dependencies": [],\n'
+            '    "target_files": ["path/to/file.cs"],\n'
+            '    "required_tools": ["fs_read", "fs_write"]\n'
+            "  }\n"
+            "]"
+        )
+
+        try:
+            dummy_task = SubTask(
+                task_id="plan_lead",
+                title="Master Plan Decomposition",
+                description=prompt,
+                domain=TaskDomain.ARCHITECTURE,
+                complexity=9,
+            )
+            from app.router import DynamicModelRouter
+            router = DynamicModelRouter()
+            model, _ = router.route_task(dummy_task)
+
+            resp = await llm_client.execute_task(
+                task=dummy_task,
+                model=model,
+                context={"objective": objective, "project_type": project_type},
+                log_callback=log_callback,
+            )
+
+            raw_output = resp.get("output", "")
+            tasks_list = None
+            try:
+                tasks_list = json.loads(raw_output)
+            except Exception:
+                match = re.search(r"```(?:json)?\s*(\[.*?\])\s*```", raw_output, re.DOTALL)
+                if match:
+                    tasks_list = json.loads(match.group(1))
+                else:
+                    first_bracket = raw_output.find("[")
+                    last_bracket = raw_output.rfind("]")
+                    if first_bracket != -1 and last_bracket != -1 and last_bracket > first_bracket:
+                        tasks_list = json.loads(raw_output[first_bracket : last_bracket + 1])
+
+            if not isinstance(tasks_list, list) or len(tasks_list) < 2:
+                return None
+
+            domain_map = {
+                "architecture": TaskDomain.ARCHITECTURE,
+                "implementation": TaskDomain.IMPLEMENTATION,
+                "verification": TaskDomain.VERIFICATION,
+                "utility": TaskDomain.UTILITY,
+                "analysis": TaskDomain.ANALYSIS,
+            }
+
+            parsed_tasks: Dict[str, SubTask] = {}
+            for item in tasks_list:
+                tid = str(item.get("task_id", f"task_{uuid.uuid4().hex[:6]}"))
+                d_str = str(item.get("domain", "implementation")).lower()
+                domain = domain_map.get(d_str, TaskDomain.IMPLEMENTATION)
+                parsed_tasks[tid] = SubTask(
+                    task_id=tid,
+                    title=str(item.get("title", f"Subtask {tid}")),
+                    description=str(item.get("description", "")),
+                    domain=domain,
+                    complexity=max(1, min(10, int(item.get("complexity", 7)))),
+                    dependencies=[str(d) for d in item.get("dependencies", [])],
+                    target_files=[str(f) for f in item.get("target_files", [])],
+                    required_tools=[str(t) for t in item.get("required_tools", ["fs_read", "fs_write"])],
+                )
+
+            # Sanity check: Ensure dependencies actually exist in parsed_tasks
+            for tid, t in parsed_tasks.items():
+                t.dependencies = [dep for dep in t.dependencies if dep in parsed_tasks and dep != tid]
+
+            return parsed_tasks
+        except Exception:
+            return None
 
     @staticmethod
     def estimate_task_duration(domain: TaskDomain, complexity: int) -> int:

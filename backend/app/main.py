@@ -116,7 +116,8 @@ async def create_session(req: CreateSessionRequest):
             pass
 
     context = ProjectContextLoader.ingest(project_path, project_type, objective=req.objective)
-    state = planner_engine.decompose_objective(
+    active_llm = None if req.use_simulation else llm_client
+    state = await planner_engine.decompose_objective_intelligent(
         session_id=session_id,
         objective=req.objective,
         project_type=context["project_type"],
@@ -125,6 +126,7 @@ async def create_session(req: CreateSessionRequest):
         discovered_scripts=context.get("discovered_scripts", []),
         discovered_ui=context.get("discovered_ui", []),
         explicit_target_files=context.get("explicit_target_files", []),
+        llm_client=active_llm,
     )
     state.project_path = context["project_path"] or project_path
     state.project_type = context["project_type"]
