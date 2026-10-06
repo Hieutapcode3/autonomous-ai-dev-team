@@ -627,6 +627,9 @@ class LLMClient:
         completion_tokens = 0
         line_buffer = ""
 
+        last_progress_time = time.time()
+        chunk_count = 0
+
         async with httpx.AsyncClient(timeout=180.0) as client:
             async with client.stream("POST", f"{self.ollama_base_url}/api/chat", json=payload) as response:
                 async for chunk_bytes in response.aiter_lines():
@@ -637,14 +640,27 @@ class LLMClient:
                         content_piece = chunk.get("message", {}).get("content", "")
                         accumulated_text += content_piece
                         line_buffer += content_piece
+                        chunk_count += 1
 
                         if "\n" in line_buffer and log_callback:
                             lines = line_buffer.split("\n")
                             line_buffer = lines[-1]
                             for l in lines[:-1]:
                                 stripped = l.strip()
-                                if stripped and (stripped.startswith('"') or stripped.startswith("{") or "def " in stripped or "class " in stripped):
-                                    await log_callback("Ollama", stripped[:120], "INFO")
+                                if stripped:
+                                    # Clean json escape slashes if present for readability
+                                    display_line = stripped.replace('\\"', '"').replace("\\n", " ")
+                                    await log_callback("Ollama", display_line[:130], "INFO")
+
+                        # Periodic progress indicator every 3 seconds so user knows CPU is actively generating
+                        now = time.time()
+                        if now - last_progress_time > 3.0 and log_callback:
+                            last_progress_time = now
+                            await log_callback(
+                                "Ollama",
+                                f"Actively generating code... ({len(accumulated_text)} characters received so far)",
+                                "INFO",
+                            )
 
                         if chunk.get("done"):
                             prompt_tokens = chunk.get("prompt_eval_count", 0)
@@ -730,12 +746,15 @@ class LLMClient:
                 if log_callback and decoded:
                     await log_callback("CLI", decoded[:140], "INFO")
 
+        stderr_lines = []
+
         async def read_stderr():
             while True:
                 line = await proc.stderr.readline()
                 if not line:
                     break
                 decoded = line.decode(errors="replace").rstrip()
+                stderr_lines.append(decoded)
                 if log_callback and decoded:
                     await log_callback("CLI", f"[stderr] {decoded}", "WARN")
 
@@ -754,11 +773,15 @@ class LLMClient:
             raise RuntimeError("Claude CLI process timed out after 60s")
 
         full_stdout = "\n".join(stdout_lines)
+        full_stderr = "\n".join(stderr_lines)
 
         if proc.returncode != 0:
-            if "Not logged in" in full_stdout or "Please run /login" in full_stdout:
+            err_msg = full_stderr.strip() or full_stdout.strip()
+            if "Not logged in" in err_msg or "Please run /login" in err_msg:
                 raise RuntimeError("Claude CLI is not authenticated. Please run 'claude auth login' in your terminal.")
-            raise RuntimeError(f"Claude CLI exited with code {proc.returncode}")
+            if "Credit balance is too low" in err_msg:
+                raise RuntimeError("Claude CLI: Credit balance is too low. Please add credits to your Anthropic account.")
+            raise RuntimeError(f"Claude CLI failed (code {proc.returncode}): {err_msg[:200]}")
 
         if log_callback:
             await log_callback("CLI", "Claude CLI execution succeeded. Parsing response...", "SUCCESS")
