@@ -84,9 +84,12 @@ class PlannerEngine:
                     f"==========================================================\n"
                 )
 
-            is_level_editor = any(
-                kw in objective.lower()
-                for kw in ["level editor", "leveleditor", "level-editor", "level_editor", "board editor", "map editor"]
+            is_level_editor = (
+                any(
+                    kw in objective.lower()
+                    for kw in ["level editor", "leveleditor", "level-editor", "level_editor", "board editor", "map editor", "màn chơi", "stage editor"]
+                )
+                or ("level" in objective.lower() and "editor" in objective.lower())
             )
             is_editor_tool = is_level_editor or any(
                 kw in objective.lower()
