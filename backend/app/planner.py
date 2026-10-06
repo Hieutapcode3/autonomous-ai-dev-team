@@ -7,16 +7,58 @@ from app.schemas import SubTask, TaskDomain, TaskStatus, GlobalDAGState
 
 class PlannerEngine:
     @staticmethod
-    def _match_scripts(discovered_scripts: List[str], *keyword_groups: List[str]) -> List[str]:
-        """Return script paths from discovered_scripts matching any keyword group."""
-        results: List[str] = []
+    def _match_scripts(discovered_scripts: List[str], objective: str) -> List[str]:
+        """Rank and return scripts matching exact filename, stem, or relevant keywords."""
+        if not discovered_scripts or not objective:
+            return []
+
+        stopwords = {
+            "làm", "dựa", "vào", "file", "cho", "và", "các", "những", "để", "thêm",
+            "sửa", "tạo", "trong", "theo", "viết", "hãy", "code", "the", "a", "an",
+            "in", "to", "for", "with", "from", "by", "on", "of", "and", "is", "it"
+        }
+
+        tokens = re.findall(r"[\w\.-]+", objective)
+
+        # 1. Exact match against filename or stem
+        exact_matches: List[str] = []
         for script in discovered_scripts:
-            lower = script.lower()
-            for group in keyword_groups:
-                if any(kw.lower() in lower for kw in group):
-                    results.append(script)
-                    break
-        return results[:4]  # cap at 4 files per task to keep prompts focused
+            s_name = Path(script).name.lower()
+            s_stem = Path(script).stem.lower()
+            for t in tokens:
+                t_lower = t.lower()
+                if t_lower == s_name or t_lower == s_stem:
+                    if script not in exact_matches:
+                        exact_matches.append(script)
+
+        if exact_matches:
+            return exact_matches[:4]
+
+        # 2. Keyword relevance scoring (ignoring stopwords)
+        meaningful_keywords = [
+            t.lower() for t in tokens
+            if len(t) >= 3 and t.lower() not in stopwords
+        ]
+
+        if not meaningful_keywords:
+            return []
+
+        scored_scripts = []
+        for script in discovered_scripts:
+            s_lower = script.lower()
+            s_name_lower = Path(script).name.lower()
+            score = 0
+            for kw in meaningful_keywords:
+                if kw in s_name_lower:
+                    score += 3  # Higher weight if keyword is in the class name
+                elif kw in s_lower:
+                    score += 1
+
+            if score > 0:
+                scored_scripts.append((score, script))
+
+        scored_scripts.sort(key=lambda x: -x[0])
+        return [script for _, script in scored_scripts[:4]]
 
     def decompose_objective(
         self,
@@ -27,6 +69,7 @@ class PlannerEngine:
         skills: Optional[List[Dict[str, Any]]] = None,
         discovered_scripts: Optional[List[str]] = None,
         discovered_ui: Optional[List[str]] = None,
+        explicit_target_files: Optional[List[str]] = None,
     ) -> GlobalDAGState:
         tasks: Dict[str, SubTask] = {}
 
@@ -38,11 +81,8 @@ class PlannerEngine:
         if project_type == "unity":
             scripts = discovered_scripts or []
 
-            # Extract keywords from the objective for file matching
-            obj_words = objective.lower().split()
-
-            # Match files specifically mentioned in the objective
-            objective_matched = self._match_scripts(scripts, obj_words) if scripts else []
+            # Match files specifically mentioned in the objective with smart ranking
+            objective_matched = self._match_scripts(scripts, objective) if scripts else []
 
             # Determine whether this is a new feature/tool/editor or modification of an existing script
             is_new_tool_or_feature = any(
@@ -87,7 +127,65 @@ class PlannerEngine:
                 if len(parts) >= 3:
                     base_script_dir = "/".join(parts[:parts.index("Scripts") + 1]) if "Scripts" in parts else "/".join(parts[:-1])
 
-            if is_editor_tool and existing_editor_scripts:
+            if explicit_target_files:
+                code_targets = [f for f in explicit_target_files if not f.endswith((".uxml", ".uss"))]
+                ui_targets = [f for f in explicit_target_files if f.endswith((".uxml", ".uss"))]
+                impl_files = code_targets or explicit_target_files
+                scene_files = ui_targets or [
+                    f for f in (discovered_ui or []) if any(Path(c).stem in f for c in impl_files)
+                ] or (discovered_ui[:2] if discovered_ui else [impl_files[0]])
+
+                first_target = impl_files[0]
+                target_stem = Path(first_target).stem
+                root_module_dir = str(Path(first_target).parent).replace("\\", "/")
+                arch_files = [f"{root_module_dir}/ArchitectureSpec.md"]
+
+                tasks[t1_id] = SubTask(
+                    task_id=t1_id,
+                    title=f"Architecture & Reference Alignment ({target_stem})",
+                    description=(
+                        f"Review architecture and align implementation with referenced target: '{target_stem}'.\n"
+                        f"{spec_guide_text}\n"
+                        "PRE-CHECK (NON-DESTRUCTIVE): Preserve all existing interfaces. Only extend."
+                    ),
+                    domain=TaskDomain.ARCHITECTURE,
+                    complexity=7,
+                    dependencies=[],
+                    required_tools=["fs_write"],
+                    target_files=arch_files,
+                )
+
+                tasks[t2_id] = SubTask(
+                    task_id=t2_id,
+                    title=f"Target Implementation: {target_stem}",
+                    description=(
+                        f"Implement changes for objective: '{objective}' directly into target files.\n"
+                        f"{spec_guide_text}\n"
+                        f"EXPLICIT TARGET FILES: {', '.join(impl_files)}\n"
+                        "MANDATORY: Modify the designated target files carefully. Zero deletions of existing working APIs. English comments only."
+                    ),
+                    domain=TaskDomain.IMPLEMENTATION,
+                    complexity=7,
+                    dependencies=[t1_id],
+                    required_tools=["fs_read", "fs_write"],
+                    target_files=impl_files,
+                )
+
+                tasks[t3_id] = SubTask(
+                    task_id=t3_id,
+                    title="UI Toolkit Visual Layout & Style Refinement",
+                    description=(
+                        f"Align visual layout, UXML, and USS styles for: '{objective}'.\n"
+                        f"{spec_guide_text}\n"
+                        "Ensure styling adheres to editor conventions and non-destructive guidelines."
+                    ),
+                    domain=TaskDomain.IMPLEMENTATION,
+                    complexity=6,
+                    dependencies=[t2_id],
+                    required_tools=["fs_read", "fs_write"],
+                    target_files=scene_files,
+                )
+            elif is_editor_tool and existing_editor_scripts:
                 # The project ALREADY HAS an existing editor implementation! TARGET EXISTING FILES!
                 main_window = next((s for s in existing_editor_scripts if s.endswith("EditorWindow.cs")), existing_editor_scripts[0])
                 other_partials = [s for s in existing_editor_scripts if s != main_window][:5]

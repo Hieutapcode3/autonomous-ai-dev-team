@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { X, Sparkles, ShieldAlert, Gamepad2, Globe, ShieldCheck, Image as ImageIcon, Video, UploadCloud, Trash2, Loader2, Code2, ExternalLink } from "lucide-react";
+import { X, Sparkles, ShieldAlert, Gamepad2, Globe, ShieldCheck, Image as ImageIcon, Video, UploadCloud, Trash2, Loader2, Code2, ExternalLink, AtSign, FileCode, FileText, Check } from "lucide-react";
 
 export interface ReferenceMediaItem {
   name: string;
@@ -9,6 +9,12 @@ export interface ReferenceMediaItem {
   media_type: string;
   size_bytes?: number;
   extracted_logic?: any;
+}
+
+export interface ProjectFileInfo {
+  path: string;
+  name: string;
+  ext: string;
 }
 
 interface TaskModalProps {
@@ -57,6 +63,14 @@ export function TaskModal({ isOpen, onClose, onSubmit, initialObjective }: TaskM
     projectName?: string;
   } | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // File mention (@) state
+  const [mentionOpen, setMentionOpen] = useState<boolean>(false);
+  const [mentionQuery, setMentionQuery] = useState<string>("");
+  const [mentionFiles, setMentionFiles] = useState<ProjectFileInfo[]>([]);
+  const [mentionLoading, setMentionLoading] = useState<boolean>(false);
+  const [mentionSelectedIndex, setMentionSelectedIndex] = useState<number>(0);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -98,6 +112,107 @@ export function TaskModal({ isOpen, onClose, onSubmit, initialObjective }: TaskM
       }
     }
   }, [isOpen, initialObjective, projectType]);
+  // Query project files when mention popup is open
+  useEffect(() => {
+    if (!mentionOpen || !projectPath.trim()) return;
+
+    let isMounted = true;
+    setMentionLoading(true);
+
+    const timer = setTimeout(() => {
+      fetch(
+        `http://localhost:8000/api/project/files?project_path=${encodeURIComponent(
+          projectPath
+        )}&q=${encodeURIComponent(mentionQuery)}`
+      )
+        .then((res) => res.json())
+        .then((data) => {
+          if (isMounted) {
+            setMentionFiles(data.files || []);
+            setMentionSelectedIndex(0);
+            setMentionLoading(false);
+          }
+        })
+        .catch(() => {
+          if (isMounted) {
+            setMentionFiles([]);
+            setMentionLoading(false);
+          }
+        });
+    }, 100);
+
+    return () => {
+      isMounted = false;
+      clearTimeout(timer);
+    };
+  }, [mentionOpen, mentionQuery, projectPath]);
+
+  const handleObjectiveChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const val = e.target.value;
+    setObjective(val);
+
+    const cursorPos = e.target.selectionStart || val.length;
+    const textBeforeCursor = val.slice(0, cursorPos);
+    const match = textBeforeCursor.match(/@([a-zA-Z0-9_\-\./]*)$/);
+
+    if (match) {
+      setMentionQuery(match[1]);
+      setMentionOpen(true);
+    } else {
+      setMentionOpen(false);
+    }
+  };
+
+  const handleSelectMention = (file: ProjectFileInfo) => {
+    if (!textareaRef.current) return;
+    const el = textareaRef.current;
+    const cursorPos = el.selectionStart || objective.length;
+    const textBeforeCursor = objective.slice(0, cursorPos);
+    const textAfterCursor = objective.slice(cursorPos);
+
+    const newBefore = textBeforeCursor.replace(/@([a-zA-Z0-9_\-\./]*)$/, `@${file.path} `);
+    const newObjective = newBefore + textAfterCursor;
+    setObjective(newObjective);
+    setMentionOpen(false);
+
+    setTimeout(() => {
+      if (textareaRef.current) {
+        textareaRef.current.focus();
+        const nextPos = newBefore.length;
+        textareaRef.current.setSelectionRange(nextPos, nextPos);
+      }
+    }, 10);
+  };
+
+  const handleTextareaKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (!mentionOpen || mentionFiles.length === 0) return;
+
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setMentionSelectedIndex((prev) => (prev + 1) % mentionFiles.length);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setMentionSelectedIndex((prev) => (prev - 1 + mentionFiles.length) % mentionFiles.length);
+    } else if (e.key === "Enter" || e.key === "Tab") {
+      e.preventDefault();
+      handleSelectMention(mentionFiles[mentionSelectedIndex]);
+    } else if (e.key === "Escape") {
+      setMentionOpen(false);
+    }
+  };
+
+  const openMentionPicker = () => {
+    setMentionQuery("");
+    setMentionOpen(true);
+    if (textareaRef.current) {
+      const val = objective;
+      if (!val.endsWith("@")) {
+        const newVal = val + (val.length > 0 && !val.endsWith(" ") ? " @" : "@");
+        setObjective(newVal);
+      }
+      textareaRef.current.focus();
+    }
+  };
 
   if (!isOpen) return null;
 
@@ -306,18 +421,121 @@ export function TaskModal({ isOpen, onClose, onSubmit, initialObjective }: TaskM
             </div>
           </div>
 
-          <div>
-            <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
-              Engineering Goal / Task Description
-            </label>
-            <textarea
-              value={objective}
-              onChange={(e) => setObjective(e.target.value)}
-              rows={3}
-              placeholder="Describe what you want the multi-agent software team to build, refactor, or test..."
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-slate-100 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-colors placeholder:text-slate-600"
-              required
-            />
+          <div className="relative">
+            <div className="flex items-center justify-between mb-2">
+              <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider">
+                Engineering Goal / Task Description
+              </label>
+              <button
+                type="button"
+                onClick={openMentionPicker}
+                className="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-md bg-cyan-950/60 border border-cyan-800/60 text-cyan-400 hover:bg-cyan-900/50 hover:border-cyan-500 transition-colors"
+                title="Search and reference project files using @"
+              >
+                <AtSign className="w-3 h-3" />
+                <span>Reference Project File (@)</span>
+              </button>
+            </div>
+
+            <div className="relative">
+              <textarea
+                ref={textareaRef}
+                value={objective}
+                onChange={handleObjectiveChange}
+                onKeyDown={handleTextareaKeyDown}
+                rows={3}
+                placeholder="Describe what you want to build or refactor... (Tip: Type @ to mention and link project files like @level-editor.md or @Toolbar.cs)"
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-slate-100 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-colors placeholder:text-slate-600 font-sans leading-relaxed"
+                required
+              />
+
+              {/* Floating @ Mention Autocomplete Popup */}
+              {mentionOpen && (
+                <div className="absolute left-0 right-0 top-full mt-1.5 z-50 bg-slate-900/95 backdrop-blur-md border border-cyan-500/40 rounded-xl shadow-2xl overflow-hidden animate-in fade-in slide-in-from-top-2 duration-150">
+                  <div className="px-3 py-1.5 bg-slate-950/80 border-b border-slate-800 flex items-center justify-between text-[11px] text-slate-400">
+                    <div className="flex items-center gap-1.5 text-cyan-400 font-medium">
+                      <AtSign className="w-3.5 h-3.5" />
+                      <span>Referenced Project Files {mentionQuery && `(matching: "${mentionQuery}")`}</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-[10px] text-slate-400">
+                      {mentionLoading ? (
+                        <span className="flex items-center gap-1 text-cyan-400">
+                          <Loader2 className="w-3 h-3 animate-spin" /> Scanning...
+                        </span>
+                      ) : (
+                        <span>{mentionFiles.length} file(s) • [↑↓ to select, Enter to apply, Esc to close]</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="max-h-56 overflow-y-auto divide-y divide-slate-800/40">
+                    {mentionFiles.length === 0 && !mentionLoading ? (
+                      <div className="p-3 text-xs text-slate-400 text-center">
+                        No matching project files found for &quot;{mentionQuery}&quot;. Keep typing or check project path.
+                      </div>
+                    ) : (
+                      mentionFiles.map((f, idx) => {
+                        const isSelected = idx === mentionSelectedIndex;
+                        const isMd = f.ext === "md" || f.ext === "txt";
+                        const isCs = f.ext === "cs";
+                        const isUi = f.ext === "uxml" || f.ext === "uss";
+                        const isConfig = f.ext === "json" || f.ext === "yaml" || f.ext === "yml";
+
+                        return (
+                          <button
+                            key={f.path}
+                            type="button"
+                            onClick={() => handleSelectMention(f)}
+                            className={`w-full text-left px-3 py-2 flex items-center justify-between gap-3 text-xs transition-colors ${
+                              isSelected
+                                ? "bg-cyan-950/70 border-l-2 border-cyan-400 text-white"
+                                : "hover:bg-slate-800/60 text-slate-300"
+                            }`}
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span
+                                className={`text-[10px] px-1.5 py-0.5 rounded font-mono font-semibold uppercase ${
+                                  isMd
+                                    ? "bg-amber-950/80 text-amber-300 border border-amber-800/50"
+                                    : isCs
+                                    ? "bg-cyan-950/80 text-cyan-300 border border-cyan-800/50"
+                                    : isUi
+                                    ? "bg-purple-950/80 text-purple-300 border border-purple-800/50"
+                                    : isConfig
+                                    ? "bg-emerald-950/80 text-emerald-300 border border-emerald-800/50"
+                                    : "bg-slate-800 text-slate-300 border border-slate-700"
+                                }`}
+                              >
+                                {f.ext || "file"}
+                              </span>
+                              <span className="font-medium text-slate-100 truncate">{f.name}</span>
+                              <span className="text-[10px] text-slate-400 font-mono truncate hidden sm:inline">
+                                {f.path}
+                              </span>
+                            </div>
+
+                            {isSelected && (
+                              <span className="text-[10px] text-cyan-400 flex items-center gap-1 font-mono shrink-0">
+                                Enter <Check className="w-3 h-3" />
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="mt-1.5 flex items-center justify-between text-[11px] text-slate-400">
+              <span className="flex items-center gap-1 text-slate-400">
+                <span className="text-cyan-400 font-mono">@</span> Gõ <strong className="text-slate-300 font-mono">@tên_file</strong> để gán file tham chiếu chính xác (ví dụ: <code className="text-cyan-300">@level-editor.md</code>).
+              </span>
+              <span className="text-[10px] text-slate-400 font-mono">
+                {objective.includes("@") ? "Target locked" : "Free prompt"}
+              </span>
+            </div>
           </div>
 
           <div>

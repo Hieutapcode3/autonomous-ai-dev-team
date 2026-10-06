@@ -124,6 +124,7 @@ async def create_session(req: CreateSessionRequest):
         skills=context["skills"],
         discovered_scripts=context.get("discovered_scripts", []),
         discovered_ui=context.get("discovered_ui", []),
+        explicit_target_files=context.get("explicit_target_files", []),
     )
     state.project_path = context["project_path"] or project_path
     state.project_type = context["project_type"]
@@ -139,6 +140,16 @@ async def create_session(req: CreateSessionRequest):
         state.has_task_key = True
     sessions[session_id] = state
     return state
+
+
+@app.get("/api/project/files")
+async def list_project_files(project_path: str = Query(...), q: Optional[str] = Query(None)):
+    """Search and list project files for autocomplete and @ mentions."""
+    try:
+        files = ProjectContextLoader.scan_project_files(project_path, query=q, limit=40)
+        return {"files": files, "count": len(files)}
+    except Exception as e:
+        return {"files": [], "count": 0, "error": str(e)}
 
 
 @app.post("/api/upload-reference")

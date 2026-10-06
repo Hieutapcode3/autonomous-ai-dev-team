@@ -90,6 +90,148 @@ class ProjectContextLoader:
         return "generic"
 
     @classmethod
+    def scan_project_files(cls, project_path: str, query: Optional[str] = None, limit: int = 50) -> List[Dict[str, str]]:
+        """Quickly list non-ignored project files for autocomplete and @ mentions."""
+        if not project_path:
+            return []
+        p = Path(project_path).resolve()
+        if not p.exists() or not p.is_dir():
+            return []
+
+        ignore_folders = {
+            ".git", ".vs", ".idea", "Library", "Temp", "PackageCache", "obj",
+            "Build", "Builds", "node_modules", "bin", "logs", "__pycache__", ".pytest_cache"
+        }
+        allowed_extensions = {
+            ".cs", ".md", ".uxml", ".uss", ".json", ".shader",
+            ".ts", ".tsx", ".js", ".py", ".html", ".css", ".yaml", ".yml", ".txt"
+        }
+
+        matched_files = []
+        q_lower = query.lower().strip() if query else ""
+
+        for root, dirs, files in os.walk(p):
+            dirs[:] = [d for d in dirs if d not in ignore_folders and not d.startswith(".")]
+
+            for file in files:
+                ext = Path(file).suffix.lower()
+                if ext not in allowed_extensions:
+                    continue
+
+                full_path = Path(root) / file
+                rel_path = str(full_path.relative_to(p)).replace("\\", "/")
+                name_lower = file.lower()
+                rel_lower = rel_path.lower()
+
+                if q_lower:
+                    if q_lower not in name_lower and q_lower not in rel_lower:
+                        continue
+
+                is_exact = (name_lower == q_lower or Path(file).stem.lower() == q_lower)
+                starts_with = name_lower.startswith(q_lower) if q_lower else False
+                score = 2 if is_exact else (1 if starts_with else 0)
+
+                matched_files.append({
+                    "path": rel_path,
+                    "name": file,
+                    "ext": ext.lstrip("."),
+                    "score": score,
+                })
+
+        matched_files.sort(key=lambda x: (-x["score"], len(x["path"]), x["path"]))
+        return [{k: v for k, v in item.items() if k != "score"} for item in matched_files[:limit]]
+
+    @classmethod
+    def extract_referenced_files(cls, project_path: Optional[str], objective: Optional[str]) -> Dict[str, List[str]]:
+        """
+        Detect any files explicitly or implicitly referenced in objective:
+        1. @ mentions (e.g. @Assets/BlockHome/level-editor.md or @level-editor.md)
+        2. Words with file extensions (e.g. BlockHomeLevelEditorWindow.Toolbar.cs, level-editor.md)
+        3. Exact matching of filename stems in the project (e.g. BlockHomeLevelEditorWindow, level-editor)
+        Returns:
+            {"spec_files": [...], "code_files": [...]}
+        """
+        if not project_path or not objective:
+            return {"spec_files": [], "code_files": []}
+
+        p = Path(project_path).resolve()
+        if not p.exists() or not p.is_dir():
+            return {"spec_files": [], "code_files": []}
+
+        at_mentions = re.findall(r"@([\w\./\\-]+)", objective)
+        ext_tokens = re.findall(r"\b([\w\.-]+\.(?:md|cs|uxml|uss|json|shader|py|ts|tsx|js|html|txt))\b", objective, re.IGNORECASE)
+        stem_tokens = re.findall(r"\b([A-Za-z0-9_-]{4,})\b", objective)
+
+        candidates = set()
+        for m in at_mentions:
+            clean_m = m.replace("\\", "/").strip("./")
+            candidates.add(clean_m)
+            candidates.add(Path(clean_m).name)
+        for t in ext_tokens:
+            candidates.add(t)
+            candidates.add(Path(t).name)
+        for s in stem_tokens:
+            candidates.add(s)
+
+        ignore_folders = {
+            ".git", ".vs", ".idea", "Library", "Temp", "PackageCache", "obj",
+            "Build", "Builds", "node_modules", "bin", "logs"
+        }
+        valid_code_exts = {".cs", ".uxml", ".uss", ".json", ".shader", ".py", ".ts", ".tsx", ".js", ".html", ".css"}
+        generic_stem_words = {
+            "level", "editor", "game", "system", "tool", "file", "code", "scene",
+            "view", "data", "test", "demo", "play", "home", "block", "script", "manager"
+        }
+
+        matched_specs = []
+        matched_code = []
+        seen_paths = set()
+
+        for root, dirs, files in os.walk(p):
+            dirs[:] = [d for d in dirs if d not in ignore_folders and not d.startswith(".")]
+            for file in files:
+                if file.endswith(".meta"):
+                    continue
+
+                full_path = Path(root) / file
+                rel_path = str(full_path.relative_to(p)).replace("\\", "/")
+                fname = file
+                fname_lower = fname.lower()
+                stem_lower = Path(file).stem.lower()
+                ext_lower = Path(file).suffix.lower()
+
+                matched = False
+                for c in candidates:
+                    c_lower = c.lower()
+                    # 1. Exact relative path
+                    if c_lower == rel_path.lower():
+                        matched = True
+                        break
+                    # 2. Exact filename with extension
+                    if c_lower == fname_lower:
+                        matched = True
+                        break
+                    # 3. Exact stem match for compound/specific names (excluding generic single words)
+                    if (
+                        "." not in c
+                        and c_lower == stem_lower
+                        and len(c) >= 5
+                        and c_lower not in generic_stem_words
+                        and ext_lower in (valid_code_exts | {".md", ".txt"})
+                    ):
+                        matched = True
+                        break
+
+                if matched and rel_path not in seen_paths:
+                    seen_paths.add(rel_path)
+                    if ext_lower in [".md", ".txt"]:
+                        matched_specs.append(rel_path)
+                    elif ext_lower in valid_code_exts:
+                        matched_code.append(rel_path)
+
+        return {"spec_files": matched_specs, "code_files": matched_code}
+
+    @classmethod
     def discover_rules(cls, project_path: Optional[str], project_type: str, objective: Optional[str] = None) -> List[Dict[str, Any]]:
         """Collect all active rules from global configs, project-specific files, and user-referenced specs."""
         rules: List[Dict[str, Any]] = list(cls.MANDATORY_GLOBAL_RULES)
@@ -116,27 +258,43 @@ class ProjectContextLoader:
         if project_path:
             p = Path(project_path).resolve()
             if p.exists() and p.is_dir():
-                # Extract any *.md files mentioned in user's objective (e.g. 'level-editor.md')
-                mentioned_md_files = []
-                if objective:
-                    mentioned_md_files = re.findall(r"[\w\.-]+\.md", objective, re.IGNORECASE)
+                referenced = cls.extract_referenced_files(project_path, objective)
+                referenced_specs = set(referenced["spec_files"])
 
                 ignore_folders = {".git", ".pytest_cache", "Library", "Temp", "PackageCache", "obj", "Build", "Builds"}
                 seen_sources = set()
 
-                # Recursively search for all relevant markdown files in project
+                # First load explicitly referenced spec files with maximum priority & full content
+                for ref_spec in referenced_specs:
+                    spec_path = p / ref_spec
+                    if spec_path.exists() and ref_spec not in seen_sources:
+                        seen_sources.add(ref_spec)
+                        try:
+                            content = spec_path.read_text(encoding="utf-8", errors="replace")
+                            rules.insert(0, {
+                                "id": f"project_{spec_path.stem}",
+                                "title": f"⭐ PRIMARY SPECIFICATION GUIDE: {ref_spec}",
+                                "content": content.strip()[:10000],
+                                "source": ref_spec,
+                                "is_primary_spec": True,
+                            })
+                        except Exception:
+                            pass
+
+                # Recursively search for other relevant markdown files in project
                 for md_file in p.rglob("*.md"):
                     if any(ignored in md_file.parts for ignored in ignore_folders):
                         continue
 
                     rel_path = str(md_file.relative_to(p)).replace("\\", "/")
+                    if rel_path in seen_sources:
+                        continue
+
                     fname = md_file.name
                     fname_lower = fname.lower()
 
-                    is_explicitly_mentioned = any(fname_lower == m.lower() for m in mentioned_md_files)
                     is_spec_or_rule = (
-                        is_explicitly_mentioned
-                        or fname in ["AGENTS.md", "CLAUDE.md", "GEMINI.md", ".cursorrules", "RULES.md"]
+                        fname in ["AGENTS.md", "CLAUDE.md", "GEMINI.md", ".cursorrules", "RULES.md"]
                         or any(kw in fname_lower for kw in ["editor", "spec", "architecture", "design", "guide", "manual", "rule"])
                     )
 
@@ -144,19 +302,13 @@ class ProjectContextLoader:
                         seen_sources.add(rel_path)
                         try:
                             content = md_file.read_text(encoding="utf-8", errors="replace")
-                            # If explicitly mentioned in objective, give generous capacity and top priority
-                            max_len = 8000 if is_explicitly_mentioned else 2500
-                            rule_entry = {
+                            rules.append({
                                 "id": f"project_{md_file.stem}",
-                                "title": f"{'⭐ PRIMARY SPECIFICATION GUIDE' if is_explicitly_mentioned else 'Project Guideline'}: {rel_path}",
-                                "content": content.strip()[:max_len],
+                                "title": f"Project Guideline: {rel_path}",
+                                "content": content.strip()[:2500],
                                 "source": rel_path,
-                                "is_primary_spec": is_explicitly_mentioned,
-                            }
-                            if is_explicitly_mentioned:
-                                rules.insert(0, rule_entry)  # Place at the very top of rules!
-                            else:
-                                rules.append(rule_entry)
+                                "is_primary_spec": False,
+                            })
                         except Exception:
                             pass
 
@@ -283,11 +435,17 @@ class ProjectContextLoader:
                         "source": "Project Editor Scan",
                     })
 
+        referenced = cls.extract_referenced_files(project_path, objective)
+        explicit_target_files = referenced["code_files"]
+        explicit_spec_files = referenced["spec_files"]
+
         summary = (
             f"Project: {project_path or 'Sandbox'} | Type: [{resolved_type.upper()}] | "
             f"Ingested Rules: {len(rules)} | Discovered Skills: {len(skills)}"
             + (f" | Existing Scripts: {len(discovered_scripts)}" if discovered_scripts else "")
             + (f" | UI Assets: {len(discovered_ui)}" if discovered_ui else "")
+            + (f" | Referenced Targets: {len(explicit_target_files)}" if explicit_target_files else "")
+            + (f" | Referenced Specs: {len(explicit_spec_files)}" if explicit_spec_files else "")
         )
 
         return {
@@ -298,4 +456,6 @@ class ProjectContextLoader:
             "summary": summary,
             "discovered_scripts": discovered_scripts,
             "discovered_ui": discovered_ui,
+            "explicit_target_files": explicit_target_files,
+            "explicit_spec_files": explicit_spec_files,
         }
