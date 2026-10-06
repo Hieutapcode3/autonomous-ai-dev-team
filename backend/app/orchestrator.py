@@ -505,6 +505,7 @@ class TeamOrchestrator:
                 )
 
                 if verify_result.passed:
+                    self.router.metrics.record_result(allocated_model, task.domain, True)
                     task.status = TaskStatus.COMPLETED
                     task.output_artifacts = {
                         "files": list(code_changes.keys()),
@@ -519,6 +520,7 @@ class TeamOrchestrator:
                     await self._broadcast("TASK_COMPLETED", task.model_dump())
                     await self._broadcast("SESSION_UPDATED", self.state.model_dump())
                 else:
+                    self.router.metrics.record_result(allocated_model, task.domain, False)
                     task.status = TaskStatus.FAILED
                     task.error_trace = verify_result.error_log
                     # Enrich error trace with file context for the replan LLM
