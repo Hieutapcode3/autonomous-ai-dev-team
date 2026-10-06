@@ -10,6 +10,7 @@ from app.planner import PlannerEngine
 from app.llm import LLMClient
 from app.github_service import GitHubService
 from app.coding_agent import CodingAgent
+from app.git_workspace import GitWorkspaceManager
 from app import unity_verifier
 
 
@@ -45,6 +46,8 @@ class TeamOrchestrator:
         self._running_task: Optional[asyncio.Task] = None
         self._file_backups: Dict[str, str] = {}
         self._created_files: Set[str] = set()
+        self._git_branch: Optional[str] = None
+        self._orig_git_branch: Optional[str] = None
 
     def stop_execution(self) -> None:
         """Signal the orchestrator to stop. Cancels the running asyncio task immediately."""
@@ -94,6 +97,14 @@ class TeamOrchestrator:
                 await self._emit_log("Rollback", "Triggered Unity Editor refresh to clear compile errors.", "INFO")
             except Exception as e:
                 await self._emit_log("Rollback", f"Unity refresh note: {e}", "WARN")
+
+        # 4. Clean Git working copy if repository exists
+        if project_path and GitWorkspaceManager.is_git_repo(project_path):
+            try:
+                GitWorkspaceManager.reset_and_clean_changes(project_path)
+                await self._emit_log("Git", "Git workspace cleanly reset to HEAD.", "INFO")
+            except Exception:
+                pass
 
     def _read_project_files(self, task: SubTask) -> Dict[str, str]:
         """Read current on-disk content of the task's target files plus contextual sibling files."""
@@ -288,6 +299,18 @@ class TeamOrchestrator:
             "Rule, Skill, Visual Reference & Playable Demo Ingestion Gate PASSED. All guidelines bound to Agent Fleet.",
             "SUCCESS"
         )
+
+        # Phase 0.5: Git Worktree / Branch Isolation Gate
+        if self.state.project_path and GitWorkspaceManager.is_git_repo(self.state.project_path):
+            self._orig_git_branch = GitWorkspaceManager.get_current_branch(self.state.project_path)
+            feature_branch = f"ai-agent/{self.state.session_id[:8]}"
+            if GitWorkspaceManager.create_and_checkout_feature_branch(self.state.project_path, feature_branch):
+                self._git_branch = feature_branch
+                await self._emit_log(
+                    "Git",
+                    f"Created & switched to isolated branch '{feature_branch}'. Base branch '{self._orig_git_branch or 'main'}' is protected.",
+                    "SUCCESS",
+                )
 
         await self._broadcast("SESSION_UPDATED", self.state.model_dump())
 
@@ -519,6 +542,19 @@ class TeamOrchestrator:
                     )
                     await self._broadcast("TASK_COMPLETED", task.model_dump())
                     await self._broadcast("SESSION_UPDATED", self.state.model_dump())
+
+                    if self.state.project_path and GitWorkspaceManager.is_git_repo(self.state.project_path):
+                        try:
+                            sha = GitWorkspaceManager.commit_task_changes(
+                                self.state.project_path,
+                                task.task_id,
+                                task.title,
+                                list(code_changes.keys()),
+                            )
+                            if sha:
+                                await self._emit_log("Git", f"Created micro-commit [{sha}] for #{task.task_id}: '{task.title}'", "INFO")
+                        except Exception:
+                            pass
                 else:
                     self.router.metrics.record_result(allocated_model, task.domain, False)
                     task.status = TaskStatus.FAILED
