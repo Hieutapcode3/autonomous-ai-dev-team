@@ -50,20 +50,42 @@ class TeamOrchestrator:
             self._running_task.cancel()
 
     def _read_project_files(self, task: SubTask) -> Dict[str, str]:
-        """Read current on-disk content of the task's target files."""
+        """Read current on-disk content of the task's target files plus contextual sibling files."""
         project_path = self.state.project_path
-        if not project_path or not task.target_files:
+        if not project_path:
             return {}
         base = Path(project_path)
         contents: Dict[str, str] = {}
-        for rel in task.target_files:
-            abs_path = base / rel
-            if abs_path.exists() and abs_path.is_file():
-                try:
-                    # Limit to 8 KB per file to keep prompt size manageable
-                    contents[rel] = abs_path.read_text(encoding="utf-8", errors="replace")[:8000]
-                except Exception:
-                    pass
+        target_dirs = set()
+
+        # 1. Read explicitly targeted files
+        if task.target_files:
+            for rel in task.target_files:
+                abs_path = base / rel
+                if abs_path.exists() and abs_path.is_file():
+                    try:
+                        # Limit to 8 KB per file to keep prompt size manageable
+                        contents[rel] = abs_path.read_text(encoding="utf-8", errors="replace")[:8000]
+                        target_dirs.add(abs_path.parent)
+                    except Exception:
+                        pass
+
+        # 2. Also read sibling related files (.cs, .uxml, .uss) in the same directory (e.g. partial classes)
+        for d in target_dirs:
+            try:
+                for pattern in ["*.cs", "*.uxml", "*.uss"]:
+                    for sibling in d.glob(pattern):
+                        if len(contents) >= 8:
+                            break
+                        try:
+                            sibling_rel = sibling.relative_to(base).as_posix()
+                            if sibling_rel not in contents:
+                                contents[sibling_rel] = sibling.read_text(encoding="utf-8", errors="replace")[:6000]
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
         return contents
 
     async def _broadcast(self, event_type: str, data: Dict[str, Any]):

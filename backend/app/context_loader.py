@@ -252,26 +252,42 @@ class ProjectContextLoader:
         skills = cls.discover_skills(project_path)
 
         discovered_scripts: List[str] = []
+        discovered_ui: List[str] = []
         if project_path and resolved_type == "unity":
             p = Path(project_path)
             assets_dir = p / "Assets"
             if assets_dir.exists() and assets_dir.is_dir():
-                for cs_file in assets_dir.rglob("*.cs"):
-                    rel_p = str(cs_file.relative_to(p)).replace("\\", "/")
-                    if "Plugins" not in rel_p and "TutorialInfo" not in rel_p:
-                        discovered_scripts.append(rel_p)
+                for ext in ["*.cs", "*.uxml", "*.uss"]:
+                    for f in assets_dir.rglob(ext):
+                        rel_p = str(f.relative_to(p)).replace("\\", "/")
+                        if "Plugins" not in rel_p and "TutorialInfo" not in rel_p:
+                            if ext == "*.cs":
+                                discovered_scripts.append(rel_p)
+                            else:
+                                discovered_ui.append(rel_p)
+
                 if discovered_scripts:
                     rules.append({
                         "id": "project_existing_scripts",
                         "title": f"Existing Project C# Scripts ({len(discovered_scripts)} found)",
-                        "content": "Existing project C# scripts available to inspect and modify:\n" + "\n".join([f"- {s}" for s in discovered_scripts[:60]]),
+                        "content": "Existing project C# scripts available to inspect and modify:\n" + "\n".join([f"- {s}" for s in discovered_scripts[:80]]),
                         "source": "Project Assets Scan",
+                    })
+
+                editor_scripts = [s for s in discovered_scripts if "editor" in s.lower()]
+                if editor_scripts:
+                    rules.append({
+                        "id": "project_existing_editor_scripts",
+                        "title": f"Existing Unity Editor Scripts ({len(editor_scripts)} found)",
+                        "content": "Existing Editor tool scripts in the project (DO NOT duplicate, extend these):\n" + "\n".join([f"- {s}" for s in editor_scripts]),
+                        "source": "Project Editor Scan",
                     })
 
         summary = (
             f"Project: {project_path or 'Sandbox'} | Type: [{resolved_type.upper()}] | "
             f"Ingested Rules: {len(rules)} | Discovered Skills: {len(skills)}"
             + (f" | Existing Scripts: {len(discovered_scripts)}" if discovered_scripts else "")
+            + (f" | UI Assets: {len(discovered_ui)}" if discovered_ui else "")
         )
 
         return {
@@ -281,4 +297,5 @@ class ProjectContextLoader:
             "skills": skills,
             "summary": summary,
             "discovered_scripts": discovered_scripts,
+            "discovered_ui": discovered_ui,
         }

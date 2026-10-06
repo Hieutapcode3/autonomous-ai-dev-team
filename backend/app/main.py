@@ -123,6 +123,7 @@ async def create_session(req: CreateSessionRequest):
         rules=context["rules"],
         skills=context["skills"],
         discovered_scripts=context.get("discovered_scripts", []),
+        discovered_ui=context.get("discovered_ui", []),
     )
     state.project_path = context["project_path"] or project_path
     state.project_type = context["project_type"]

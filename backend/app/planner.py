@@ -26,6 +26,7 @@ class PlannerEngine:
         rules: Optional[List[Dict[str, Any]]] = None,
         skills: Optional[List[Dict[str, Any]]] = None,
         discovered_scripts: Optional[List[str]] = None,
+        discovered_ui: Optional[List[str]] = None,
     ) -> GlobalDAGState:
         tasks: Dict[str, SubTask] = {}
 
@@ -46,7 +47,7 @@ class PlannerEngine:
             # Determine whether this is a new feature/tool/editor or modification of an existing script
             is_new_tool_or_feature = any(
                 kw in objective.lower()
-                for kw in ["tạo", "create", "thêm", "add", "editor", "level editor", "system", "tool", "ui", "new"]
+                for kw in ["tạo", "create", "thêm", "add", "editor", "level editor", "system", "tool", "ui", "new", "audit", "làm"]
             )
 
             # Check if any rule is an explicitly mentioned primary specification (e.g. level-editor.md)
@@ -66,6 +67,18 @@ class PlannerEngine:
                 for kw in ["editor", "level editor", "editor window", "tool cho gd", "authoring", "board editor", "map editor"]
             )
 
+            # Check if the project ALREADY has existing editor scripts
+            existing_editor_scripts = [
+                s for s in scripts
+                if "editor" in s.lower() and any(w in s.lower() for w in ["level", "window", "toolbar", "modes", "data", "tool", "board", "inspector", "navigation", "session", "workspace", "playtest", "serialization"])
+            ]
+
+            # Check for existing UI Toolkit files
+            existing_editor_ui = [
+                s for s in (discovered_ui or [])
+                if "editor" in s.lower() and any(w in s.lower() for w in ["level", "window", "board"])
+            ]
+
             # Determine base scripts directory
             base_script_dir = "Assets/Scripts"
             if scripts:
@@ -74,8 +87,79 @@ class PlannerEngine:
                 if len(parts) >= 3:
                     base_script_dir = "/".join(parts[:parts.index("Scripts") + 1]) if "Scripts" in parts else "/".join(parts[:-1])
 
-            if is_editor_tool:
-                # Unity Editor tools MUST reside in an Editor folder to access UnityEditor API and avoid runtime build failures
+            if is_editor_tool and existing_editor_scripts:
+                # The project ALREADY HAS an existing editor implementation! TARGET EXISTING FILES!
+                main_window = next((s for s in existing_editor_scripts if s.endswith("EditorWindow.cs")), existing_editor_scripts[0])
+                other_partials = [s for s in existing_editor_scripts if s != main_window][:5]
+                impl_files = [main_window] + other_partials
+
+                scene_files = existing_editor_ui or [
+                    s for s in (discovered_ui or []) if s.endswith(".uxml") or s.endswith(".uss")
+                ]
+                if not scene_files:
+                    main_stem = Path(main_window).stem
+                    scene_files = [
+                        f"Assets/BlockHome/Editor/UXML/{main_stem}.uxml",
+                        f"Assets/BlockHome/Editor/USS/{main_stem}.uss",
+                    ]
+
+                window_stem = Path(main_window).stem
+                root_module_dir = str(Path(main_window).parent).replace("\\", "/")
+                arch_files = [f"{root_module_dir}/ArchitectureSpec.md"]
+
+                tasks[t1_id] = SubTask(
+                    task_id=t1_id,
+                    title=f"Level Editor Architecture & Feature Audit ({window_stem})",
+                    description=(
+                        f"Review and plan enhancements for the EXISTING Level Editor: '{window_stem}'.\n"
+                        f"{spec_guide_text}\n"
+                        f"Existing Editor Scripts detected in project:\n" + "\n".join([f"- {f}" for f in impl_files]) + "\n\n"
+                        "MANDATORY REQUIREMENT:\n"
+                        "- Do NOT create a duplicate window or reinvent existing data models.\n"
+                        "- Analyze existing partial classes and identify exact methods/modes to add or update per level-editor.md."
+                    ),
+                    domain=TaskDomain.ARCHITECTURE,
+                    complexity=8,
+                    dependencies=[],
+                    required_tools=["fs_write"],
+                    target_files=arch_files,
+                )
+
+                tasks[t2_id] = SubTask(
+                    task_id=t2_id,
+                    title=f"Level Editor C# Logic Enhancement ({window_stem})",
+                    description=(
+                        f"Implement requested objective on the EXISTING Level Editor: '{objective}'.\n"
+                        f"{spec_guide_text}\n"
+                        f"Target Existing Editor Scripts:\n" + "\n".join([f"- {f}" for f in impl_files]) + "\n\n"
+                        "MANDATORY NON-DESTRUCTIVE RULES:\n"
+                        "1. EXTEND EXISTING CODE: Work within the existing namespace and partial classes.\n"
+                        "2. PRESERVE ALL EXISTING FUNCTIONALITY: Do not delete, break, or remove existing tools, modes, or data models.\n"
+                        "3. Strictly NO Vietnamese in comments. Clean C# UI Toolkit code."
+                    ),
+                    domain=TaskDomain.IMPLEMENTATION,
+                    complexity=7,
+                    dependencies=[t1_id],
+                    required_tools=["fs_read", "fs_write"],
+                    target_files=impl_files,
+                )
+
+                tasks[t3_id] = SubTask(
+                    task_id=t3_id,
+                    title="UI Toolkit Visual Layout & Style Refinement",
+                    description=(
+                        f"Align UXML structure and USS stylesheets with the level editor objective: '{objective}'.\n"
+                        f"{spec_guide_text}\n"
+                        "Ensure UI layout is responsive, toolbar buttons are styled correctly, and canvas preview elements conform to the spec."
+                    ),
+                    domain=TaskDomain.IMPLEMENTATION,
+                    complexity=6,
+                    dependencies=[t2_id],
+                    required_tools=["fs_read", "fs_write"],
+                    target_files=scene_files,
+                )
+            elif is_editor_tool:
+                # Brand new editor tool where none existed
                 feature_name = "LevelEditor" if any(w in objective.lower() for w in ["level", "map", "board", "stage"]) else "CustomEditor"
                 root_module_dir = base_script_dir.rsplit("/Scripts", 1)[0] if "/Scripts" in base_script_dir else base_script_dir
                 editor_dir = f"{root_module_dir}/Editor/{feature_name}"
@@ -89,68 +173,59 @@ class PlannerEngine:
                     f"{editor_dir}/{feature_name}Window.uxml",
                     f"{editor_dir}/{feature_name}Window.uss",
                 ]
-            elif is_new_tool_or_feature and not objective_matched:
-                feature_name = "FeatureController"
-                impl_files = [f"{base_script_dir}/{feature_name}/{feature_name}.cs"]
-                scene_files = [f"{base_script_dir}/{feature_name}/{feature_name}Config.cs"]
-                arch_files = [f"{base_script_dir}/Architecture/ArchitectureSpec.md"]
-            else:
-                impl_files = objective_matched or [f"{base_script_dir}/Gameplay/NewFeatureController.cs"]
-                scene_files = [f"{base_script_dir}/Gameplay/NewFeatureConfig.cs"]
-                arch_files = [f"{base_script_dir}/Architecture/ArchitectureSpec.md"]
 
-            tasks[t1_id] = SubTask(
-                task_id=t1_id,
-                title="Unity Architecture & ScriptableObject Blueprint",
-                description=(
-                    f"Design game systems for the following objective: '{objective}'.\n"
-                    f"{spec_guide_text}\n"
-                    "PRE-CHECK (YAGNI & NON-DESTRUCTIVE):\n"
-                    "- Evaluate if modifying existing files is strictly necessary. Prefer creating NEW modular components in dedicated folders.\n"
-                    "- NEVER rewrite existing core game managers.\n"
-                    "- Output a concise architecture and data structure spec document."
-                ),
-                domain=TaskDomain.ARCHITECTURE,
-                complexity=8,
-                dependencies=[],
-                required_tools=["fs_write"],
-                target_files=arch_files,
-            )
+                tasks[t1_id] = SubTask(
+                    task_id=t1_id,
+                    title="Unity Architecture & ScriptableObject Blueprint",
+                    description=(
+                        f"Design game systems for the following objective: '{objective}'.\n"
+                        f"{spec_guide_text}\n"
+                        "PRE-CHECK (YAGNI & NON-DESTRUCTIVE):\n"
+                        "- Evaluate if modifying existing files is strictly necessary. Prefer creating NEW modular components in dedicated folders.\n"
+                        "- NEVER rewrite existing core game managers.\n"
+                        "- Output a concise architecture and data structure spec document."
+                    ),
+                    domain=TaskDomain.ARCHITECTURE,
+                    complexity=8,
+                    dependencies=[],
+                    required_tools=["fs_write"],
+                    target_files=arch_files,
+                )
 
-            tasks[t2_id] = SubTask(
-                task_id=t2_id,
-                title="Gameplay C# Logic & Component Implementation",
-                description=(
-                    f"Implement the following objective in Unity C# scripts: '{objective}'.\n"
-                    f"{spec_guide_text}\n"
-                    "MANDATORY NON-DESTRUCTIVE RULES:\n"
-                    "1. PRE-CHECK: Before modifying any existing script, verify if you can implement the feature in a new script instead.\n"
-                    "2. ZERO DELETIONS: You are STRICTLY FORBIDDEN from deleting, removing, or renaming ANY existing methods, properties, or fields in existing files.\n"
-                    "3. If modifying an existing file: PRESERVE ALL ORIGINAL CODE intact. Only APPEND new methods or hooks.\n"
-                    "4. For Editor tools, place all code in Editor/ folder and strictly follow UI Toolkit conventions.\n"
-                    "5. Strictly NO Vietnamese in comments. Clean English code."
-                ),
-                domain=TaskDomain.IMPLEMENTATION,
-                complexity=7,
-                dependencies=[t1_id],
-                required_tools=["fs_read", "fs_write"],
-                target_files=impl_files,
-            )
+                tasks[t2_id] = SubTask(
+                    task_id=t2_id,
+                    title="Gameplay C# Logic & Component Implementation",
+                    description=(
+                        f"Implement the following objective in Unity C# scripts: '{objective}'.\n"
+                        f"{spec_guide_text}\n"
+                        "MANDATORY NON-DESTRUCTIVE RULES:\n"
+                        "1. PRE-CHECK: Before modifying any existing script, verify if you can implement the feature in a new script instead.\n"
+                        "2. ZERO DELETIONS: You are STRICTLY FORBIDDEN from deleting, removing, or renaming ANY existing methods, properties, or fields in existing files.\n"
+                        "3. If modifying an existing file: PRESERVE ALL ORIGINAL CODE intact. Only APPEND new methods or hooks.\n"
+                        "4. For Editor tools, place all code in Editor/ folder and strictly follow UI Toolkit conventions.\n"
+                        "5. Strictly NO Vietnamese in comments. Clean English code."
+                    ),
+                    domain=TaskDomain.IMPLEMENTATION,
+                    complexity=7,
+                    dependencies=[t1_id],
+                    required_tools=["fs_read", "fs_write"],
+                    target_files=impl_files,
+                )
 
-            tasks[t3_id] = SubTask(
-                task_id=t3_id,
-                title="Unity UI Toolkit & Tooling (UXML/USS/MCP)",
-                description=(
-                    f"Implement the visual interface, UXML layout, USS styles, and editor tooling for: '{objective}'.\n"
-                    f"{spec_guide_text}\n"
-                    "NON-DESTRUCTIVE: Do not delete existing assets or scene components. Only generate new UI Toolkit assets or tool configurations."
-                ),
-                domain=TaskDomain.IMPLEMENTATION,
-                complexity=6,
-                dependencies=[t2_id],
-                required_tools=["unity_mcp", "fs_write"],
-                target_files=scene_files,
-            )
+                tasks[t3_id] = SubTask(
+                    task_id=t3_id,
+                    title="Unity UI Toolkit & Tooling (UXML/USS/MCP)",
+                    description=(
+                        f"Implement the visual interface, UXML layout, USS styles, and editor tooling for: '{objective}'.\n"
+                        f"{spec_guide_text}\n"
+                        "NON-DESTRUCTIVE: Do not delete existing assets or scene components. Only generate new UI Toolkit assets or tool configurations."
+                    ),
+                    domain=TaskDomain.IMPLEMENTATION,
+                    complexity=6,
+                    dependencies=[t2_id],
+                    required_tools=["unity_mcp", "fs_write"],
+                    target_files=scene_files,
+                )
 
             tasks[t4_id] = SubTask(
                 task_id=t4_id,
